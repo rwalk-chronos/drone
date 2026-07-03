@@ -12,6 +12,7 @@ pygame.display.set_caption("Randomized Multi-Drone Response Simulation")
 clock = pygame.time.Clock()
 font = pygame.font.SysFont(None, 24)
 small_font = pygame.font.SysFont(None, 20)
+large_font = pygame.font.SysFont(None, 34)
 
 
 def to_screen(x, y):
@@ -216,7 +217,8 @@ while running:
     screen.blit(
         font.render(
             f"t={simulation.time:.1f}s  seed={simulation.seed}  mode={mode}  "
-            f"targets={metrics['targets']}  waiting={metrics['waiting']}",
+            f"targets={metrics['targets']}  waiting={metrics['waiting']}  "
+            f"interceptor speed={simulation.interceptor_speed:.0f} yd/s",
             True,
             (0, 0, 0),
         ),
@@ -242,13 +244,40 @@ while running:
     )
 
     if not started:
+        panel = pygame.Rect(250, 125, 600, 215)
+        pygame.draw.rect(screen, (235, 242, 252), panel)
+        pygame.draw.rect(screen, (0, 70, 150), panel, 2)
+        screen.blit(
+            large_font.render("SETUP MODE", True, (0, 70, 150)),
+            (panel.x + 210, panel.y + 18),
+        )
+        screen.blit(
+            large_font.render(
+                f"Target count: {simulation.target_count}",
+                True,
+                (0, 0, 0),
+            ),
+            (panel.x + 55, panel.y + 75),
+        )
+        screen.blit(
+            large_font.render(
+                f"Interceptor speed: {simulation.interceptor_speed:.0f} yd/s",
+                True,
+                (0, 0, 0),
+            ),
+            (panel.x + 55, panel.y + 115),
+        )
         screen.blit(
             font.render(
-                "SETUP MODE: choose target count, seed, and arrival mode; press ENTER to start",
+                f"Seed: {simulation.seed}    Arrival: {mode}",
                 True,
-                (0, 70, 150),
+                (0, 0, 0),
             ),
-            (20, 100),
+            (panel.x + 55, panel.y + 160),
+        )
+        screen.blit(
+            font.render("Press ENTER to start", True, (0, 100, 0)),
+            (panel.x + 205, panel.y + 190),
         )
     elif paused:
         screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 100))
