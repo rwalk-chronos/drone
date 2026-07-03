@@ -17,13 +17,16 @@ DETECTION_RANGE = 1100.0
 INITIAL_INTERCEPTOR_SPEED = 60.0
 INTERCEPTORS_PER_BALLOON = 6
 
-TARGET_TEMPLATES = [
-    {"x": -520.0, "y": 1500.0, "vx": 7.0, "vy": -24.0},
-    {"x": -260.0, "y": 1420.0, "vx": 4.0, "vy": -23.0},
-    {"x": 0.0, "y": 1560.0, "vx": 0.0, "vy": -26.0},
-    {"x": 280.0, "y": 1460.0, "vx": -4.0, "vy": -23.0},
-    {"x": 520.0, "y": 1520.0, "vx": -7.0, "vy": -24.0},
-]
+DEFAULT_TARGET_COUNT = 10
+MIN_TARGET_COUNT = 1
+MAX_TARGET_COUNT = 50
+DEFAULT_RANDOM_SEED = 42
+DEFAULT_STAGGERED_ARRIVAL = True
+MAX_SPAWN_DELAY = 12.0
+TARGET_START_X_RANGE = (-700.0, 700.0)
+TARGET_START_Y_RANGE = (1350.0, 1650.0)
+TARGET_SPEED_RANGE = (20.0, 30.0)
+TARGET_HORIZONTAL_FRACTION = 0.35
 
 BALLOON_TEMPLATES = [
     {"id": 1, "x": -500.0, "y": 0.0},
