@@ -19,6 +19,7 @@ class Simulation:
         self.target_count = config.DEFAULT_TARGET_COUNT
         self.seed = config.DEFAULT_RANDOM_SEED
         self.staggered_arrival = config.DEFAULT_STAGGERED_ARRIVAL
+        self.interceptor_speed = config.INITIAL_INTERCEPTOR_SPEED
         self.reset("Simulation started")
 
     def generate_target_templates(self):
@@ -52,7 +53,7 @@ class Simulation:
         self.complete = False
         self.event_log = [
             f"{message} | seed={self.seed} targets={self.target_count} "
-            f"staggered={self.staggered_arrival}"
+            f"speed={self.interceptor_speed:.0f} staggered={self.staggered_arrival}"
         ]
         self.balloons = []
         for template in config.BALLOON_TEMPLATES:
@@ -95,10 +96,11 @@ class Simulation:
         self.reset("Arrival mode changed")
 
     def adjust_interceptor_speed(self, delta):
+        self.interceptor_speed = max(5.0, self.interceptor_speed + delta)
         for target in self.targets:
             interceptor = target["interceptor"]
             if interceptor is not None:
-                interceptor["speed"] = max(5.0, interceptor["speed"] + delta)
+                interceptor["speed"] = self.interceptor_speed
 
     def available_balloons_in_range(self, target):
         return [
@@ -125,7 +127,7 @@ class Simulation:
             "y": balloon["y"],
             "vx": 0.0,
             "vy": 0.0,
-            "speed": config.INITIAL_INTERCEPTOR_SPEED,
+            "speed": self.interceptor_speed,
             "launched": False,
             "path": [],
         }
