@@ -4,6 +4,7 @@ import math
 import pygame
 
 import config
+import guidance
 from simulation import Simulation
 
 pygame.init()
@@ -72,6 +73,10 @@ while running:
                 paused = not paused
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_v:
             show_vectors = not show_vectors
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_g:
+            simulation.cycle_guidance_mode()
+            started = False
+            paused = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_1:
             simulation_rate = 1.0
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_2:
@@ -234,6 +239,9 @@ while running:
                     interceptor_position[1] + (10 if target["id"] % 2 else -26),
                 ),
             )
+            if interceptor.get("aim_point") is not None and show_vectors:
+                aim = interceptor["aim_point"]
+                pygame.draw.circle(screen, (0, 0, 120), to_screen(aim["x"], aim["y"]), 4, 1)
             if show_vectors and not resolved:
                 draw_vector(
                     interceptor,
@@ -244,11 +252,11 @@ while running:
 
     metrics = simulation.metrics()
     mode = "staggered" if simulation.staggered_arrival else "simultaneous"
+    guidance_label = guidance.mode_label(simulation.guidance_mode)
     screen.blit(
         font.render(
             f"t={simulation.time:.1f}s  rate={simulation_rate:g}x  seed={simulation.seed}  "
-            f"mode={mode}  targets={metrics['targets']}  waiting={metrics['waiting']}  "
-            f"interceptor speed={simulation.interceptor_speed:.0f} yd/s",
+            f"mode={mode}  guidance={guidance_label}",
             True,
             (0, 0, 0),
         ),
@@ -256,9 +264,10 @@ while running:
     )
     screen.blit(
         font.render(
+            f"targets={metrics['targets']}  waiting={metrics['waiting']}  "
             f"queued={metrics['queued']}  launched={metrics['launched']}  "
             f"intercepted={metrics['intercepted']}  failed={metrics['failed']}  "
-            f"unassigned={metrics['unassigned']}",
+            f"unassigned={metrics['unassigned']}  speed={simulation.interceptor_speed:.0f} yd/s",
             True,
             (0, 0, 0),
         ),
@@ -266,7 +275,7 @@ while running:
     )
     screen.blit(
         small_font.render(
-            "LEFT/RIGHT or A/D targets   N seed   S arrival   ENTER start   "
+            "LEFT/RIGHT targets   G guidance   N seed   S arrival   ENTER start   "
             "R reset   Space pause   V vectors   UP/DOWN speed   1/2/3/4 time scale",
             True,
             (0, 0, 0),
@@ -275,12 +284,12 @@ while running:
     )
 
     if not started:
-        panel = pygame.Rect(250, 125, 600, 255)
+        panel = pygame.Rect(230, 125, 640, 285)
         pygame.draw.rect(screen, (235, 242, 252), panel)
         pygame.draw.rect(screen, (0, 70, 150), panel, 2)
         screen.blit(
             large_font.render("SETUP MODE", True, (0, 70, 150)),
-            (panel.x + 210, panel.y + 18),
+            (panel.x + 230, panel.y + 18),
         )
         screen.blit(
             large_font.render(
@@ -292,15 +301,15 @@ while running:
         )
         screen.blit(
             large_font.render(
-                f"Interceptor speed: {simulation.interceptor_speed:.0f} yd/s",
+                f"Guidance: {guidance_label}",
                 True,
                 (0, 0, 0),
             ),
             (panel.x + 55, panel.y + 110),
         )
         screen.blit(
-            font.render(
-                f"Time scale: {simulation_rate:g}x (1 = real time)",
+            large_font.render(
+                f"Interceptor speed: {simulation.interceptor_speed:.0f} yd/s",
                 True,
                 (0, 0, 0),
             ),
@@ -308,11 +317,19 @@ while running:
         )
         screen.blit(
             font.render(
+                f"Time scale: {simulation_rate:g}x (1 = real time)",
+                True,
+                (0, 0, 0),
+            ),
+            (panel.x + 55, panel.y + 190),
+        )
+        screen.blit(
+            font.render(
                 f"Launch interval: {config.LAUNCH_INTERVAL:.1f}s per balloon",
                 True,
                 (0, 0, 0),
             ),
-            (panel.x + 55, panel.y + 180),
+            (panel.x + 55, panel.y + 220),
         )
         screen.blit(
             font.render(
@@ -320,11 +337,11 @@ while running:
                 True,
                 (0, 0, 0),
             ),
-            (panel.x + 55, panel.y + 208),
+            (panel.x + 55, panel.y + 248),
         )
         screen.blit(
             font.render("Press ENTER to start", True, (0, 100, 0)),
-            (panel.x + 205, panel.y + 232),
+            (panel.x + 225, panel.y + 267),
         )
     elif paused:
         screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 100))
