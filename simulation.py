@@ -81,6 +81,7 @@ class Simulation:
                     "selected_balloon": None,
                     "path": [],
                     "interceptor": None,
+                    "ready_time": None,
                     "resolved_time": None,
                     "reservation_released": False,
                 }
@@ -133,6 +134,7 @@ class Simulation:
         target["unassigned"] = False
         target["status"] = "QUEUED"
         target["selected_balloon"] = balloon
+        target["ready_time"] = self.time + config.LAUNCH_DELAY
         target["interceptor"] = {
             "id": target["id"],
             "x": balloon["x"],
@@ -144,7 +146,8 @@ class Simulation:
             "path": [],
         }
         self.event_log.append(
-            f"T{target['id']} queued at B{balloon['id']} at {self.time:.1f}s"
+            f"T{target['id']} queued B{balloon['id']} at {self.time:.1f}s; "
+            f"ready {target['ready_time']:.1f}s"
         )
         return True
 
@@ -165,7 +168,7 @@ class Simulation:
         balloon["inventory"] += 1
         target["reservation_released"] = True
         self.event_log.append(
-            f"T{target['id']} removed from B{balloon['id']} queue"
+            f"T{target['id']} removed from B{balloon['id']} queue at {self.time:.1f}s"
         )
 
     def process_launch_queues(self):
@@ -177,10 +180,18 @@ class Simulation:
                     continue
                 break
 
-            if not balloon["queue"] or self.time < balloon["next_launch_time"]:
+            if not balloon["queue"]:
                 continue
 
-            target = self.target_by_id(balloon["queue"].pop(0))
+            target = self.target_by_id(balloon["queue"][0])
+            earliest_launch = max(
+                balloon["next_launch_time"],
+                target["ready_time"] or 0.0,
+            )
+            if self.time < earliest_launch:
+                continue
+
+            balloon["queue"].pop(0)
             interceptor = target["interceptor"]
             if interceptor is None or target["status"] == "FAILED":
                 continue
@@ -189,7 +200,8 @@ class Simulation:
             target["status"] = "LAUNCHED"
             balloon["next_launch_time"] = self.time + config.LAUNCH_INTERVAL
             self.event_log.append(
-                f"I{interceptor['id']} launched from B{balloon['id']}"
+                f"I{interceptor['id']} launched B{balloon['id']} at {self.time:.1f}s; "
+                f"next slot {balloon['next_launch_time']:.1f}s"
             )
 
     def update_target(self, target, dt):
@@ -244,7 +256,7 @@ class Simulation:
             target["status"] = "FAILED"
             target["resolved_time"] = self.time
             self.release_reservation(target)
-            self.event_log.append(f"T{target['id']} crossed line")
+            self.event_log.append(f"T{target['id']} crossed line at {self.time:.1f}s")
 
     def step(self, dt=config.DT):
         if self.complete:
