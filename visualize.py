@@ -73,11 +73,19 @@ while running:
             simulation.adjust_interceptor_speed(5.0)
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
             simulation.adjust_interceptor_speed(-5.0)
-        elif event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHTBRACKET:
+        elif event.type == pygame.KEYDOWN and event.key in (
+            pygame.K_RIGHT,
+            pygame.K_RIGHTBRACKET,
+            pygame.K_d,
+        ):
             simulation.set_target_count(simulation.target_count + 1)
             started = False
             paused = False
-        elif event.type == pygame.KEYDOWN and event.key == pygame.K_LEFTBRACKET:
+        elif event.type == pygame.KEYDOWN and event.key in (
+            pygame.K_LEFT,
+            pygame.K_LEFTBRACKET,
+            pygame.K_a,
+        ):
             simulation.set_target_count(simulation.target_count - 1)
             started = False
             paused = False
@@ -235,7 +243,7 @@ while running:
     )
     screen.blit(
         small_font.render(
-            "[ / ] targets   N new seed   S stagger/simultaneous   "
+            "LEFT/RIGHT or A/D targets   N new seed   S arrival mode   "
             "ENTER start   R reset   Space pause   V vectors   UP/DOWN speed",
             True,
             (0, 0, 0),
