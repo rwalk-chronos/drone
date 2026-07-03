@@ -53,9 +53,12 @@ simulation = Simulation()
 started = False
 paused = False
 show_vectors = True
+simulation_rate = 1.0
 running = True
 
 while running:
+    elapsed_seconds = clock.tick(config.FPS) / 1000.0
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
@@ -69,6 +72,14 @@ while running:
                 paused = not paused
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_v:
             show_vectors = not show_vectors
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_1:
+            simulation_rate = 1.0
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_2:
+            simulation_rate = 2.0
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_3:
+            simulation_rate = 5.0
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_4:
+            simulation_rate = 10.0
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_UP:
             simulation.adjust_interceptor_speed(5.0)
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
@@ -103,7 +114,7 @@ while running:
             paused = False
 
     if started and not paused:
-        simulation.step()
+        simulation.step(elapsed_seconds * simulation_rate)
 
     screen.fill((245, 245, 245))
 
@@ -235,8 +246,8 @@ while running:
     mode = "staggered" if simulation.staggered_arrival else "simultaneous"
     screen.blit(
         font.render(
-            f"t={simulation.time:.1f}s  seed={simulation.seed}  mode={mode}  "
-            f"targets={metrics['targets']}  waiting={metrics['waiting']}  "
+            f"t={simulation.time:.1f}s  rate={simulation_rate:g}x  seed={simulation.seed}  "
+            f"mode={mode}  targets={metrics['targets']}  waiting={metrics['waiting']}  "
             f"interceptor speed={simulation.interceptor_speed:.0f} yd/s",
             True,
             (0, 0, 0),
@@ -255,8 +266,8 @@ while running:
     )
     screen.blit(
         small_font.render(
-            "LEFT/RIGHT or A/D targets   N new seed   S arrival mode   "
-            "ENTER start   R reset   Space pause   V vectors   UP/DOWN speed",
+            "LEFT/RIGHT or A/D targets   N seed   S arrival   ENTER start   "
+            "R reset   Space pause   V vectors   UP/DOWN speed   1/2/3/4 time scale",
             True,
             (0, 0, 0),
         ),
@@ -264,7 +275,7 @@ while running:
     )
 
     if not started:
-        panel = pygame.Rect(250, 125, 600, 235)
+        panel = pygame.Rect(250, 125, 600, 255)
         pygame.draw.rect(screen, (235, 242, 252), panel)
         pygame.draw.rect(screen, (0, 70, 150), panel, 2)
         screen.blit(
@@ -277,7 +288,7 @@ while running:
                 True,
                 (0, 0, 0),
             ),
-            (panel.x + 55, panel.y + 75),
+            (panel.x + 55, panel.y + 70),
         )
         screen.blit(
             large_font.render(
@@ -285,7 +296,15 @@ while running:
                 True,
                 (0, 0, 0),
             ),
-            (panel.x + 55, panel.y + 115),
+            (panel.x + 55, panel.y + 110),
+        )
+        screen.blit(
+            font.render(
+                f"Time scale: {simulation_rate:g}x (1 = real time)",
+                True,
+                (0, 0, 0),
+            ),
+            (panel.x + 55, panel.y + 150),
         )
         screen.blit(
             font.render(
@@ -293,7 +312,7 @@ while running:
                 True,
                 (0, 0, 0),
             ),
-            (panel.x + 55, panel.y + 157),
+            (panel.x + 55, panel.y + 180),
         )
         screen.blit(
             font.render(
@@ -301,11 +320,11 @@ while running:
                 True,
                 (0, 0, 0),
             ),
-            (panel.x + 55, panel.y + 185),
+            (panel.x + 55, panel.y + 208),
         )
         screen.blit(
             font.render("Press ENTER to start", True, (0, 100, 0)),
-            (panel.x + 205, panel.y + 210),
+            (panel.x + 205, panel.y + 232),
         )
     elif paused:
         screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 100))
@@ -325,6 +344,5 @@ while running:
         )
 
     pygame.display.flip()
-    clock.tick(config.FPS)
 
 pygame.quit()
