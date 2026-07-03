@@ -3,69 +3,122 @@ import pygame
 
 pygame.init()
 
-WIDTH, HEIGHT = 900, 700
+WIDTH, HEIGHT = 1100, 760
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Drone Response Timing Simulation")
+pygame.display.set_caption("Multi-Drone Response Simulation")
 clock = pygame.time.Clock()
-font = pygame.font.SysFont(None, 28)
+font = pygame.font.SysFont(None, 24)
+small_font = pygame.font.SysFont(None, 20)
 
 DT = 0.1
-scale = 0.4
-origin_x = WIDTH // 2
-origin_y = HEIGHT - 80
-
-INITIAL_TARGET = {"x": 0.0, "y": 1200.0, "vx": 0.0, "vy": -22.0}
+SCALE = 0.38
+ORIGIN_X = WIDTH // 2
+ORIGIN_Y = HEIGHT - 90
+VECTOR_SECONDS = 5.0
 INITIAL_INTERCEPTOR_SPEED = 60.0
 
+TARGET_TEMPLATES = [
+    {"x": -520.0, "y": 1500.0, "vx": 7.0, "vy": -24.0},
+    {"x": -260.0, "y": 1420.0, "vx": 4.0, "vy": -23.0},
+    {"x": 0.0, "y": 1560.0, "vx": 0.0, "vy": -26.0},
+    {"x": 280.0, "y": 1460.0, "vx": -4.0, "vy": -23.0},
+    {"x": 520.0, "y": 1520.0, "vx": -7.0, "vy": -24.0},
+]
+
 balloons = [
-    {"x": -400.0, "y": 0.0},
-    {"x": 400.0, "y": 0.0},
+    {"id": 1, "x": -500.0, "y": 0.0},
+    {"id": 2, "x": 0.0, "y": 0.0},
+    {"id": 3, "x": 500.0, "y": 0.0},
 ]
 
 launch_delay = 2.0
 success_radius = 40.0
 protected_line_y = 0.0
-detection_range = 1000.0
+detection_range = 1100.0
 
 
 def to_screen(x, y):
-    return int(origin_x + x * scale), int(origin_y - y * scale)
+    return int(ORIGIN_X + x * SCALE), int(ORIGIN_Y - y * SCALE)
 
 
-def dist(a, b):
+def distance(a, b):
     return math.hypot(a["x"] - b["x"], a["y"] - b["y"])
 
 
-def nearest_balloon(target):
-    return min(balloons, key=lambda node: dist(target, node))
+def draw_vector(entity, vx, vy, color):
+    start = to_screen(entity["x"], entity["y"])
+    end = to_screen(
+        entity["x"] + vx * VECTOR_SECONDS,
+        entity["y"] + vy * VECTOR_SECONDS,
+    )
+    pygame.draw.line(screen, color, start, end, 2)
+
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    length = math.hypot(dx, dy)
+    if length < 1:
+        return
+
+    ux = dx / length
+    uy = dy / length
+    left = (
+        int(end[0] - 10 * ux + 5 * uy),
+        int(end[1] - 10 * uy - 5 * ux),
+    )
+    right = (
+        int(end[0] - 10 * ux - 5 * uy),
+        int(end[1] - 10 * uy + 5 * ux),
+    )
+    pygame.draw.polygon(screen, color, [end, left, right])
+
+
+def new_target(index, template):
+    target = dict(template)
+    target.update(
+        {
+            "id": index + 1,
+            "status": "SEARCHING",
+            "detected": False,
+            "launch_time": None,
+            "selected_balloon": None,
+            "path": [],
+            "interceptor": None,
+        }
+    )
+    return target
 
 
 def reset_simulation(message):
-    target = dict(INITIAL_TARGET)
-    selected_balloon = nearest_balloon(target)
-    interceptor = {
-        "x": selected_balloon["x"],
-        "y": selected_balloon["y"],
-        "speed": INITIAL_INTERCEPTOR_SPEED,
-    }
     return {
-        "target": target,
-        "selected_balloon": selected_balloon,
-        "interceptor": interceptor,
-        "target_path": [],
-        "interceptor_path": [],
-        "launched": False,
-        "success": False,
-        "failed": False,
-        "detected": False,
-        "launch_time": None,
+        "targets": [
+            new_target(index, template)
+            for index, template in enumerate(TARGET_TEMPLATES)
+        ],
         "time": 0.0,
         "event_log": [message],
     }
 
 
+def create_interceptor(target, balloon):
+    return {
+        "id": target["id"],
+        "x": balloon["x"],
+        "y": balloon["y"],
+        "vx": 0.0,
+        "vy": 0.0,
+        "speed": INITIAL_INTERCEPTOR_SPEED,
+        "launched": False,
+        "path": [],
+    }
+
+
+def nearest_balloon(target):
+    return min(balloons, key=lambda node: distance(target, node))
+
+
 state = reset_simulation("Simulation started")
 paused = False
+show_vectors = True
 running = True
 
 while running:
@@ -74,199 +127,227 @@ while running:
             running = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
             paused = not paused
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_v:
+            show_vectors = not show_vectors
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_UP:
-            state["interceptor"]["speed"] += 5.0
+            for target in state["targets"]:
+                if target["interceptor"] is not None:
+                    target["interceptor"]["speed"] += 5.0
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
-            state["interceptor"]["speed"] = max(
-                5.0, state["interceptor"]["speed"] - 5.0
-            )
+            for target in state["targets"]:
+                if target["interceptor"] is not None:
+                    target["interceptor"]["speed"] = max(
+                        5.0,
+                        target["interceptor"]["speed"] - 5.0,
+                    )
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
             state = reset_simulation("Simulation restarted")
             paused = False
 
-    target = state["target"]
-    interceptor = state["interceptor"]
-    selected_balloon = state["selected_balloon"]
+    if not paused:
+        for target in state["targets"]:
+            if target["status"] in ("INTERCEPT", "FAILED"):
+                continue
 
-    if not paused and not state["success"] and not state["failed"]:
-        target["x"] += target["vx"] * DT
-        target["y"] += target["vy"] * DT
-        state["target_path"].append((target["x"], target["y"]))
+            target["x"] += target["vx"] * DT
+            target["y"] += target["vy"] * DT
+            target["path"].append((target["x"], target["y"]))
 
-        if not state["detected"]:
-            in_range = [b for b in balloons if dist(target, b) <= detection_range]
-            if in_range:
-                state["detected"] = True
-                state["selected_balloon"] = min(in_range, key=lambda b: dist(target, b))
-                selected_balloon = state["selected_balloon"]
-                interceptor["x"] = selected_balloon["x"]
-                interceptor["y"] = selected_balloon["y"]
-                state["launch_time"] = state["time"] + launch_delay
+            if not target["detected"]:
+                in_range = [
+                    balloon
+                    for balloon in balloons
+                    if distance(target, balloon) <= detection_range
+                ]
+                if in_range:
+                    target["detected"] = True
+                    target["status"] = "DETECTED"
+                    target["selected_balloon"] = nearest_balloon(target)
+                    target["interceptor"] = create_interceptor(
+                        target,
+                        target["selected_balloon"],
+                    )
+                    target["launch_time"] = state["time"] + launch_delay
+                    state["event_log"].append(
+                        f"T{target['id']} detected at {state['time']:.1f}s"
+                    )
+
+            interceptor = target["interceptor"]
+            if (
+                target["detected"]
+                and interceptor is not None
+                and not interceptor["launched"]
+                and state["time"] >= target["launch_time"]
+            ):
+                interceptor["launched"] = True
+                target["status"] = "LAUNCHED"
                 state["event_log"].append(
-                    f"Detected at {state['time']:.1f}s"
+                    f"I{interceptor['id']} launched"
                 )
 
-        if (
-            state["detected"]
-            and not state["launched"]
-            and state["launch_time"] is not None
-            and state["time"] >= state["launch_time"]
-        ):
-            state["launched"] = True
-            state["event_log"].append("Interceptor launched")
+            if interceptor is not None and interceptor["launched"]:
+                dx = target["x"] - interceptor["x"]
+                dy = target["y"] - interceptor["y"]
+                d = math.hypot(dx, dy)
 
-        if state["launched"]:
-            dx = target["x"] - interceptor["x"]
-            dy = target["y"] - interceptor["y"]
-            distance_to_target = math.hypot(dx, dy)
+                if d > 0:
+                    interceptor["vx"] = interceptor["speed"] * dx / d
+                    interceptor["vy"] = interceptor["speed"] * dy / d
+                    interceptor["x"] += interceptor["vx"] * DT
+                    interceptor["y"] += interceptor["vy"] * DT
 
-            if distance_to_target > 0:
-                interceptor["x"] += interceptor["speed"] * dx / distance_to_target * DT
-                interceptor["y"] += interceptor["speed"] * dy / distance_to_target * DT
-
-            state["interceptor_path"].append(
-                (interceptor["x"], interceptor["y"])
-            )
-
-            if dist(target, interceptor) <= success_radius:
-                state["success"] = True
-                state["event_log"].append(
-                    f"Intercept at {state['time']:.1f}s"
+                interceptor["path"].append(
+                    (interceptor["x"], interceptor["y"])
                 )
 
-        if target["y"] <= protected_line_y and not state["success"]:
-            state["failed"] = True
-            state["event_log"].append(
-                f"Target crossed line at {state['time']:.1f}s"
-            )
+                if distance(target, interceptor) <= success_radius:
+                    target["status"] = "INTERCEPT"
+                    state["event_log"].append(
+                        f"T{target['id']} intercept at {state['time']:.1f}s"
+                    )
+
+            if target["y"] <= protected_line_y and target["status"] != "INTERCEPT":
+                target["status"] = "FAILED"
+                state["event_log"].append(
+                    f"T{target['id']} crossed line"
+                )
 
         state["time"] += DT
 
     screen.fill((245, 245, 245))
 
-    for b in balloons:
+    for balloon in balloons:
         pygame.draw.circle(
             screen,
-            (180, 180, 180),
-            to_screen(b["x"], b["y"]),
-            int(detection_range * scale),
+            (185, 185, 185),
+            to_screen(balloon["x"], balloon["y"]),
+            int(detection_range * SCALE),
             1,
         )
 
     pygame.draw.line(
         screen,
         (180, 180, 0),
-        to_screen(-1000, protected_line_y),
-        to_screen(1000, protected_line_y),
+        to_screen(-1300, protected_line_y),
+        to_screen(1300, protected_line_y),
         3,
     )
 
-    if len(state["target_path"]) > 1:
-        pygame.draw.lines(
-            screen,
-            (200, 0, 0),
-            False,
-            [to_screen(x, y) for x, y in state["target_path"]],
-            2,
-        )
+    for target in state["targets"]:
+        if len(target["path"]) > 1:
+            pygame.draw.lines(
+                screen,
+                (200, 0, 0),
+                False,
+                [to_screen(x, y) for x, y in target["path"]],
+                2,
+            )
 
-    if len(state["interceptor_path"]) > 1:
-        pygame.draw.lines(
-            screen,
-            (0, 0, 200),
-            False,
-            [to_screen(x, y) for x, y in state["interceptor_path"]],
-            2,
-        )
+        interceptor = target["interceptor"]
+        if interceptor is not None and len(interceptor["path"]) > 1:
+            pygame.draw.lines(
+                screen,
+                (0, 0, 200),
+                False,
+                [to_screen(x, y) for x, y in interceptor["path"]],
+                2,
+            )
 
-    for index, b in enumerate(balloons, start=1):
-        position = to_screen(b["x"], b["y"])
-        active = b is state["selected_balloon"]
-        radius = 13 if active else 10
-        pygame.draw.circle(screen, (0, 160, 0), position, radius)
-        label = f"Balloon {index}" + (" ACTIVE" if active else "")
+    active_balloon_ids = {
+        target["selected_balloon"]["id"]
+        for target in state["targets"]
+        if target["selected_balloon"] is not None
+        and target["status"] not in ("INTERCEPT", "FAILED")
+    }
+
+    for balloon in balloons:
+        position = to_screen(balloon["x"], balloon["y"])
+        active = balloon["id"] in active_balloon_ids
+        pygame.draw.circle(screen, (0, 160, 0), position, 13 if active else 10)
+        label = f"B{balloon['id']}" + (" ACTIVE" if active else "")
         screen.blit(
-            font.render(label, True, (0, 100, 0)),
-            (position[0] + 12, position[1] - 10),
+            small_font.render(label, True, (0, 100, 0)),
+            (position[0] + 10, position[1] - 8),
         )
 
-    target_position = to_screen(target["x"], target["y"])
-    pygame.draw.circle(screen, (220, 0, 0), target_position, 8)
-    screen.blit(
-        font.render("Target", True, (160, 0, 0)),
-        (target_position[0] + 12, target_position[1] - 10),
+    for target in state["targets"]:
+        position = to_screen(target["x"], target["y"])
+        target_color = (0, 150, 0) if target["status"] == "INTERCEPT" else (220, 0, 0)
+        pygame.draw.circle(screen, target_color, position, 7)
+        screen.blit(
+            small_font.render(
+                f"T{target['id']} {target['status']}",
+                True,
+                target_color,
+            ),
+            (position[0] + 10, position[1] - 8),
+        )
+
+        if show_vectors:
+            draw_vector(target, target["vx"], target["vy"], (180, 0, 0))
+
+        interceptor = target["interceptor"]
+        if interceptor is not None and interceptor["launched"]:
+            interceptor_position = to_screen(interceptor["x"], interceptor["y"])
+            pygame.draw.circle(screen, (0, 0, 220), interceptor_position, 7)
+            screen.blit(
+                small_font.render(
+                    f"I{interceptor['id']}",
+                    True,
+                    (0, 0, 160),
+                ),
+                (interceptor_position[0] + 10, interceptor_position[1] - 8),
+            )
+            if show_vectors:
+                draw_vector(
+                    interceptor,
+                    interceptor["vx"],
+                    interceptor["vy"],
+                    (0, 0, 180),
+                )
+
+    intercepted = sum(
+        1 for target in state["targets"] if target["status"] == "INTERCEPT"
     )
-
-    if state["launched"]:
-        interceptor_position = to_screen(interceptor["x"], interceptor["y"])
-        pygame.draw.circle(screen, (0, 0, 220), interceptor_position, 8)
-        screen.blit(
-            font.render("Interceptor", True, (0, 0, 160)),
-            (interceptor_position[0] + 12, interceptor_position[1] - 10),
-        )
-
-    status = "SEARCHING"
-    status_color = (80, 80, 80)
-    if state["detected"]:
-        status = "DETECTED"
-        status_color = (180, 120, 0)
-    if state["launched"]:
-        status = "LAUNCHED"
-        status_color = (0, 80, 200)
-    if state["success"]:
-        status = "INTERCEPT"
-        status_color = (0, 180, 0)
-    if state["failed"]:
-        status = "FAILED"
-        status_color = (200, 0, 0)
-
-    text = (
-        f"t={state['time']:.1f}s  launched={state['launched']}  "
-        f"distance={dist(target, interceptor):.1f} yd  "
-        f"speed={interceptor['speed']:.1f} yd/s"
+    failed = sum(
+        1 for target in state["targets"] if target["status"] == "FAILED"
     )
-    screen.blit(font.render(text, True, (0, 0, 0)), (20, 20))
-    screen.blit(font.render(f"Status: {status}", True, status_color), (20, 150))
-
-    if paused:
-        screen.blit(
-            font.render("PAUSED - press Space", True, (0, 0, 0)),
-            (20, 90),
-        )
+    launched = sum(
+        1
+        for target in state["targets"]
+        if target["interceptor"] is not None
+        and target["interceptor"]["launched"]
+    )
 
     screen.blit(
         font.render(
-            "Space=pause  R=restart  UP/DOWN=interceptor speed",
+            f"t={state['time']:.1f}s  targets={len(state['targets'])}  "
+            f"launched={launched}  intercepted={intercepted}  failed={failed}",
             True,
             (0, 0, 0),
         ),
-        (20, 120),
+        (20, 20),
+    )
+    screen.blit(
+        font.render(
+            "Space=pause  R=restart  V=vectors  UP/DOWN=interceptor speed",
+            True,
+            (0, 0, 0),
+        ),
+        (20, 50),
     )
 
-    screen.blit(font.render("Event Log", True, (0, 0, 0)), (650, 20))
-    for i, message in enumerate(state["event_log"][-8:]):
+    if paused:
         screen.blit(
-            font.render(message, True, (0, 0, 0)),
-            (650, 50 + i * 25),
+            font.render("PAUSED", True, (0, 0, 0)),
+            (20, 80),
         )
 
-    if state["success"]:
+    screen.blit(font.render("Event Log", True, (0, 0, 0)), (820, 20))
+    for index, message in enumerate(state["event_log"][-12:]):
         screen.blit(
-            font.render(
-                "SUCCESS: simulated intercept radius reached",
-                True,
-                (0, 120, 0),
-            ),
-            (20, 55),
-        )
-    elif state["failed"]:
-        screen.blit(
-            font.render(
-                "FAILED: target crossed protected line",
-                True,
-                (180, 0, 0),
-            ),
-            (20, 55),
+            small_font.render(message, True, (0, 0, 0)),
+            (820, 50 + index * 22),
         )
 
     pygame.display.flip()
