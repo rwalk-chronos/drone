@@ -49,6 +49,7 @@ def draw_vector(entity, vx, vy, color):
 
 
 simulation = Simulation()
+started = False
 paused = False
 show_vectors = True
 running = True
@@ -57,8 +58,14 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN:
+            if not started:
+                started = True
+                paused = False
+                simulation.event_log.append("Run started")
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-            paused = not paused
+            if started:
+                paused = not paused
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_v:
             show_vectors = not show_vectors
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_UP:
@@ -67,21 +74,26 @@ while running:
             simulation.adjust_interceptor_speed(-5.0)
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHTBRACKET:
             simulation.set_target_count(simulation.target_count + 1)
+            started = False
             paused = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_LEFTBRACKET:
             simulation.set_target_count(simulation.target_count - 1)
+            started = False
             paused = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_n:
             simulation.new_seed()
+            started = False
             paused = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_s:
             simulation.toggle_staggered_arrival()
+            started = False
             paused = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
             simulation.reset()
+            started = False
             paused = False
 
-    if not paused:
+    if started and not paused:
         simulation.step()
 
     screen.fill((245, 245, 245))
@@ -222,14 +234,23 @@ while running:
     screen.blit(
         small_font.render(
             "[ / ] targets   N new seed   S stagger/simultaneous   "
-            "R replay   Space pause   V vectors   UP/DOWN speed",
+            "ENTER start   R reset   Space pause   V vectors   UP/DOWN speed",
             True,
             (0, 0, 0),
         ),
         (20, 74),
     )
 
-    if paused:
+    if not started:
+        screen.blit(
+            font.render(
+                "SETUP MODE: choose target count, seed, and arrival mode; press ENTER to start",
+                True,
+                (0, 70, 150),
+            ),
+            (20, 100),
+        )
+    elif paused:
         screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 100))
 
     if simulation.complete:
