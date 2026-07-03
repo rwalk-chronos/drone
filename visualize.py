@@ -115,7 +115,7 @@ while running:
         target["selected_balloon"]["id"]
         for target in simulation.targets
         if target["selected_balloon"] is not None
-        and target["status"] not in ("INTERCEPT", "FAILED", "UNASSIGNED")
+        and target["status"] not in ("INTERCEPT", "FAILED")
     }
 
     for balloon in simulation.balloons:
@@ -133,11 +133,13 @@ while running:
 
     for target in simulation.targets:
         position = to_screen(target["x"], target["y"])
-        resolved = target["status"] in ("INTERCEPT", "FAILED", "UNASSIGNED")
+        resolved = target["status"] in ("INTERCEPT", "FAILED")
         if target["status"] == "INTERCEPT":
             target_color = (0, 150, 0)
-        elif target["status"] in ("FAILED", "UNASSIGNED"):
+        elif target["status"] == "FAILED":
             target_color = (150, 0, 0)
+        elif target["status"] == "UNASSIGNED":
+            target_color = (220, 120, 0)
         else:
             target_color = (220, 0, 0)
 
@@ -153,7 +155,8 @@ while running:
         )
 
         if show_vectors and not resolved:
-            draw_vector(target, target["vx"], target["vy"], (180, 0, 0))
+            vector_color = (220, 120, 0) if target["status"] == "UNASSIGNED" else (180, 0, 0)
+            draw_vector(target, target["vx"], target["vy"], vector_color)
 
         interceptor = target["interceptor"]
         if interceptor is not None and interceptor["launched"]:
@@ -200,7 +203,7 @@ while running:
     if simulation.complete:
         summary = (
             f"RUN COMPLETE: {metrics['intercepted']} intercepted, "
-            f"{metrics['failed']} failed, {metrics['unassigned']} unassigned"
+            f"{metrics['failed']} failed, {metrics['unassigned']} were unassigned"
         )
         screen.blit(font.render(summary, True, (0, 120, 0)), (20, 80))
 
