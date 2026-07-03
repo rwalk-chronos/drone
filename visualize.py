@@ -83,6 +83,7 @@ def new_target(index, template):
             "selected_balloon": None,
             "path": [],
             "interceptor": None,
+            "resolved_time": None,
         }
     )
     return target
@@ -96,6 +97,7 @@ def reset_simulation(message):
         ],
         "time": 0.0,
         "event_log": [message],
+        "complete": False,
     }
 
 
@@ -114,6 +116,10 @@ def create_interceptor(target, balloon):
 
 def nearest_balloon(target):
     return min(balloons, key=lambda node: distance(target, node))
+
+
+def all_targets_resolved(targets):
+    return all(target["status"] in ("INTERCEPT", "FAILED") for target in targets)
 
 
 state = reset_simulation("Simulation started")
@@ -144,7 +150,7 @@ while running:
             state = reset_simulation("Simulation restarted")
             paused = False
 
-    if not paused:
+    if not paused and not state["complete"]:
         for target in state["targets"]:
             if target["status"] in ("INTERCEPT", "FAILED"):
                 continue
@@ -181,9 +187,7 @@ while running:
             ):
                 interceptor["launched"] = True
                 target["status"] = "LAUNCHED"
-                state["event_log"].append(
-                    f"I{interceptor['id']} launched"
-                )
+                state["event_log"].append(f"I{interceptor['id']} launched")
 
             if interceptor is not None and interceptor["launched"]:
                 dx = target["x"] - interceptor["x"]
@@ -196,23 +200,27 @@ while running:
                     interceptor["x"] += interceptor["vx"] * DT
                     interceptor["y"] += interceptor["vy"] * DT
 
-                interceptor["path"].append(
-                    (interceptor["x"], interceptor["y"])
-                )
+                interceptor["path"].append((interceptor["x"], interceptor["y"]))
 
                 if distance(target, interceptor) <= success_radius:
                     target["status"] = "INTERCEPT"
+                    target["resolved_time"] = state["time"]
                     state["event_log"].append(
                         f"T{target['id']} intercept at {state['time']:.1f}s"
                     )
 
             if target["y"] <= protected_line_y and target["status"] != "INTERCEPT":
                 target["status"] = "FAILED"
-                state["event_log"].append(
-                    f"T{target['id']} crossed line"
-                )
+                target["resolved_time"] = state["time"]
+                state["event_log"].append(f"T{target['id']} crossed line")
 
         state["time"] += DT
+
+        if all_targets_resolved(state["targets"]):
+            state["complete"] = True
+            state["event_log"].append(
+                f"Run complete at {state['time']:.1f}s"
+            )
 
     screen.fill((245, 245, 245))
 
@@ -272,18 +280,25 @@ while running:
 
     for target in state["targets"]:
         position = to_screen(target["x"], target["y"])
-        target_color = (0, 150, 0) if target["status"] == "INTERCEPT" else (220, 0, 0)
+        resolved = target["status"] in ("INTERCEPT", "FAILED")
+        target_color = (
+            (0, 150, 0)
+            if target["status"] == "INTERCEPT"
+            else (150, 0, 0) if target["status"] == "FAILED" else (220, 0, 0)
+        )
         pygame.draw.circle(screen, target_color, position, 7)
+
+        label_y_offset = -26 if target["id"] % 2 else 10
         screen.blit(
             small_font.render(
                 f"T{target['id']} {target['status']}",
                 True,
                 target_color,
             ),
-            (position[0] + 10, position[1] - 8),
+            (position[0] + 10, position[1] + label_y_offset),
         )
 
-        if show_vectors:
+        if show_vectors and not resolved:
             draw_vector(target, target["vx"], target["vy"], (180, 0, 0))
 
         interceptor = target["interceptor"]
@@ -296,9 +311,12 @@ while running:
                     True,
                     (0, 0, 160),
                 ),
-                (interceptor_position[0] + 10, interceptor_position[1] - 8),
+                (
+                    interceptor_position[0] + 10,
+                    interceptor_position[1] + (10 if target["id"] % 2 else -26),
+                ),
             )
-            if show_vectors:
+            if show_vectors and not resolved:
                 draw_vector(
                     interceptor,
                     interceptor["vx"],
@@ -338,10 +356,11 @@ while running:
     )
 
     if paused:
-        screen.blit(
-            font.render("PAUSED", True, (0, 0, 0)),
-            (20, 80),
-        )
+        screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 80))
+
+    if state["complete"]:
+        summary = f"RUN COMPLETE: {intercepted} intercepted, {failed} failed"
+        screen.blit(font.render(summary, True, (0, 120, 0)), (20, 80))
 
     screen.blit(font.render("Event Log", True, (0, 0, 0)), (820, 20))
     for index, message in enumerate(state["event_log"][-12:]):
