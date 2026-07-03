@@ -118,6 +118,7 @@ class Simulation:
         balloon = min(candidates, key=lambda node: distance(target, node))
         balloon["inventory"] -= 1
         target["detected"] = True
+        target["unassigned"] = False
         target["status"] = "DETECTED"
         target["selected_balloon"] = balloon
         target["launch_time"] = self.time + config.LAUNCH_DELAY
@@ -157,14 +158,11 @@ class Simulation:
                 for balloon in self.balloons
             )
             if in_any_detection_zone:
-                if self.assign_interceptor(target):
-                    target["unassigned"] = False
-                elif not target["unassigned"]:
+                if not self.assign_interceptor(target) and not target["unassigned"]:
                     target["unassigned"] = True
-                    target["detected"] = True
                     target["status"] = "UNASSIGNED"
                     self.event_log.append(
-                        f"T{target['id']} unassigned: no inventory"
+                        f"T{target['id']} unassigned: no local inventory"
                     )
 
         interceptor = target["interceptor"]
