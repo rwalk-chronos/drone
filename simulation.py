@@ -55,10 +55,17 @@ class Simulation:
             f"{message} | seed={self.seed} targets={self.target_count} "
             f"speed={self.interceptor_speed:.0f} staggered={self.staggered_arrival}"
         ]
+
         self.balloons = []
         for template in config.BALLOON_TEMPLATES:
             balloon = deepcopy(template)
-            balloon["inventory"] = config.INTERCEPTORS_PER_BALLOON
+            balloon.update(
+                {
+                    "inventory": config.INTERCEPTORS_PER_BALLOON,
+                    "queue": [],
+                    "next_launch_time": 0.0,
+                }
+            )
             self.balloons.append(balloon)
 
         self.targets = []
@@ -71,11 +78,11 @@ class Simulation:
                     "spawned": target["spawn_time"] <= 0,
                     "detected": False,
                     "unassigned": False,
-                    "launch_time": None,
                     "selected_balloon": None,
                     "path": [],
                     "interceptor": None,
                     "resolved_time": None,
+                    "reservation_released": False,
                 }
             )
             self.targets.append(target)
@@ -102,6 +109,9 @@ class Simulation:
             if interceptor is not None:
                 interceptor["speed"] = self.interceptor_speed
 
+    def target_by_id(self, target_id):
+        return next(target for target in self.targets if target["id"] == target_id)
+
     def available_balloons_in_range(self, target):
         return [
             balloon
@@ -117,11 +127,12 @@ class Simulation:
 
         balloon = min(candidates, key=lambda node: distance(target, node))
         balloon["inventory"] -= 1
+        balloon["queue"].append(target["id"])
+
         target["detected"] = True
         target["unassigned"] = False
-        target["status"] = "DETECTED"
+        target["status"] = "QUEUED"
         target["selected_balloon"] = balloon
-        target["launch_time"] = self.time + config.LAUNCH_DELAY
         target["interceptor"] = {
             "id": target["id"],
             "x": balloon["x"],
@@ -133,9 +144,53 @@ class Simulation:
             "path": [],
         }
         self.event_log.append(
-            f"T{target['id']} assigned B{balloon['id']} at {self.time:.1f}s"
+            f"T{target['id']} queued at B{balloon['id']} at {self.time:.1f}s"
         )
         return True
+
+    def release_reservation(self, target):
+        balloon = target["selected_balloon"]
+        interceptor = target["interceptor"]
+        if (
+            balloon is None
+            or interceptor is None
+            or interceptor["launched"]
+            or target["reservation_released"]
+        ):
+            return
+
+        balloon["queue"] = [
+            target_id for target_id in balloon["queue"] if target_id != target["id"]
+        ]
+        balloon["inventory"] += 1
+        target["reservation_released"] = True
+        self.event_log.append(
+            f"T{target['id']} removed from B{balloon['id']} queue"
+        )
+
+    def process_launch_queues(self):
+        for balloon in self.balloons:
+            while balloon["queue"]:
+                target = self.target_by_id(balloon["queue"][0])
+                if target["status"] == "FAILED":
+                    balloon["queue"].pop(0)
+                    continue
+                break
+
+            if not balloon["queue"] or self.time < balloon["next_launch_time"]:
+                continue
+
+            target = self.target_by_id(balloon["queue"].pop(0))
+            interceptor = target["interceptor"]
+            if interceptor is None or target["status"] == "FAILED":
+                continue
+
+            interceptor["launched"] = True
+            target["status"] = "LAUNCHED"
+            balloon["next_launch_time"] = self.time + config.LAUNCH_INTERVAL
+            self.event_log.append(
+                f"I{interceptor['id']} launched from B{balloon['id']}"
+            )
 
     def update_target(self, target, dt):
         if target["status"] in TERMINAL_STATUSES:
@@ -166,15 +221,6 @@ class Simulation:
                     )
 
         interceptor = target["interceptor"]
-        if (
-            interceptor is not None
-            and not interceptor["launched"]
-            and self.time >= target["launch_time"]
-        ):
-            interceptor["launched"] = True
-            target["status"] = "LAUNCHED"
-            self.event_log.append(f"I{interceptor['id']} launched")
-
         if interceptor is not None and interceptor["launched"]:
             dx = target["x"] - interceptor["x"]
             dy = target["y"] - interceptor["y"]
@@ -197,11 +243,14 @@ class Simulation:
         if target["y"] <= config.PROTECTED_LINE_Y:
             target["status"] = "FAILED"
             target["resolved_time"] = self.time
+            self.release_reservation(target)
             self.event_log.append(f"T{target['id']} crossed line")
 
     def step(self, dt=config.DT):
         if self.complete:
             return
+
+        self.process_launch_queues()
 
         for target in self.targets:
             self.update_target(target, dt)
@@ -215,6 +264,7 @@ class Simulation:
         return {
             "targets": len(self.targets),
             "waiting": sum(1 for target in self.targets if not target["spawned"]),
+            "queued": sum(1 for target in self.targets if target["status"] == "QUEUED"),
             "launched": sum(
                 1
                 for target in self.targets
