@@ -5,6 +5,7 @@ import random
 from copy import deepcopy
 
 import config
+import guidance
 
 
 TERMINAL_STATUSES = {"INTERCEPT", "FAILED"}
@@ -20,6 +21,7 @@ class Simulation:
         self.seed = config.DEFAULT_RANDOM_SEED
         self.staggered_arrival = config.DEFAULT_STAGGERED_ARRIVAL
         self.interceptor_speed = config.INITIAL_INTERCEPTOR_SPEED
+        self.guidance_mode = config.DEFAULT_GUIDANCE_MODE
         self.reset("Simulation started")
 
     def generate_target_templates(self):
@@ -53,7 +55,8 @@ class Simulation:
         self.complete = False
         self.event_log = [
             f"{message} | seed={self.seed} targets={self.target_count} "
-            f"speed={self.interceptor_speed:.0f} staggered={self.staggered_arrival}"
+            f"speed={self.interceptor_speed:.0f} guidance={self.guidance_mode} "
+            f"staggered={self.staggered_arrival}"
         ]
 
         self.balloons = []
@@ -80,6 +83,7 @@ class Simulation:
                     "unassigned": False,
                     "selected_balloon": None,
                     "path": [],
+                    "history": [],
                     "interceptor": None,
                     "ready_time": None,
                     "resolved_time": None,
@@ -102,6 +106,12 @@ class Simulation:
     def toggle_staggered_arrival(self):
         self.staggered_arrival = not self.staggered_arrival
         self.reset("Arrival mode changed")
+
+    def cycle_guidance_mode(self):
+        modes = guidance.GUIDANCE_MODES
+        current_index = modes.index(self.guidance_mode)
+        self.guidance_mode = modes[(current_index + 1) % len(modes)]
+        self.reset("Guidance mode changed")
 
     def adjust_interceptor_speed(self, delta):
         self.interceptor_speed = max(5.0, self.interceptor_speed + delta)
@@ -144,6 +154,11 @@ class Simulation:
             "speed": self.interceptor_speed,
             "launched": False,
             "path": [],
+            "waypoint": None,
+            "last_target_point": None,
+            "last_track_time": self.time,
+            "tracking_status": "QUEUED",
+            "aim_point": None,
         }
         self.event_log.append(
             f"T{target['id']} queued B{balloon['id']} at {self.time:.1f}s; "
@@ -204,6 +219,25 @@ class Simulation:
                 f"next slot {balloon['next_launch_time']:.1f}s"
             )
 
+    def move_interceptor(self, target, interceptor, dt):
+        aim = guidance.aim_point(
+            self.guidance_mode,
+            interceptor,
+            target,
+            self.time,
+            config,
+        )
+        interceptor["aim_point"] = aim
+        dx = aim["x"] - interceptor["x"]
+        dy = aim["y"] - interceptor["y"]
+        d = math.hypot(dx, dy)
+        if d > 0:
+            interceptor["vx"] = interceptor["speed"] * dx / d
+            interceptor["vy"] = interceptor["speed"] * dy / d
+            interceptor["x"] += interceptor["vx"] * dt
+            interceptor["y"] += interceptor["vy"] * dt
+        interceptor["path"].append((interceptor["x"], interceptor["y"]))
+
     def update_target(self, target, dt):
         if target["status"] in TERMINAL_STATUSES:
             return
@@ -218,6 +252,9 @@ class Simulation:
         target["x"] += target["vx"] * dt
         target["y"] += target["vy"] * dt
         target["path"].append((target["x"], target["y"]))
+        target["history"].append({"time": self.time, "x": target["x"], "y": target["y"]})
+        while target["history"] and self.time - target["history"][0]["time"] > 20.0:
+            target["history"].pop(0)
 
         if not target["detected"]:
             in_any_detection_zone = any(
@@ -234,15 +271,7 @@ class Simulation:
 
         interceptor = target["interceptor"]
         if interceptor is not None and interceptor["launched"]:
-            dx = target["x"] - interceptor["x"]
-            dy = target["y"] - interceptor["y"]
-            d = math.hypot(dx, dy)
-            if d > 0:
-                interceptor["vx"] = interceptor["speed"] * dx / d
-                interceptor["vy"] = interceptor["speed"] * dy / d
-                interceptor["x"] += interceptor["vx"] * dt
-                interceptor["y"] += interceptor["vy"] * dt
-            interceptor["path"].append((interceptor["x"], interceptor["y"]))
+            self.move_interceptor(target, interceptor, dt)
 
             if distance(target, interceptor) <= config.SUCCESS_RADIUS:
                 target["status"] = "INTERCEPT"
