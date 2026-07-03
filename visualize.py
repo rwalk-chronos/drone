@@ -158,8 +158,16 @@ while running:
         position = to_screen(balloon["x"], balloon["y"])
         active = balloon["id"] in active_balloon_ids
         pygame.draw.circle(screen, (0, 160, 0), position, 13 if active else 10)
+
+        queue_length = len(balloon["queue"])
+        if queue_length:
+            countdown = max(0.0, balloon["next_launch_time"] - simulation.time)
+            queue_text = f" q={queue_length} next={countdown:.1f}s"
+        else:
+            queue_text = " q=0"
+
         label = (
-            f"B{balloon['id']} inv={balloon['inventory']}"
+            f"B{balloon['id']} inv={balloon['inventory']}{queue_text}"
             + (" ACTIVE" if active else "")
         )
         screen.blit(
@@ -179,6 +187,8 @@ while running:
             target_color = (150, 0, 0)
         elif target["status"] == "UNASSIGNED":
             target_color = (220, 120, 0)
+        elif target["status"] == "QUEUED":
+            target_color = (120, 0, 180)
         else:
             target_color = (220, 0, 0)
 
@@ -194,11 +204,12 @@ while running:
         )
 
         if show_vectors and not resolved:
-            vector_color = (
-                (220, 120, 0)
-                if target["status"] == "UNASSIGNED"
-                else (180, 0, 0)
-            )
+            if target["status"] == "UNASSIGNED":
+                vector_color = (220, 120, 0)
+            elif target["status"] == "QUEUED":
+                vector_color = (120, 0, 180)
+            else:
+                vector_color = (180, 0, 0)
             draw_vector(target, target["vx"], target["vy"], vector_color)
 
         interceptor = target["interceptor"]
@@ -234,8 +245,9 @@ while running:
     )
     screen.blit(
         font.render(
-            f"launched={metrics['launched']}  intercepted={metrics['intercepted']}  "
-            f"failed={metrics['failed']}  unassigned={metrics['unassigned']}",
+            f"queued={metrics['queued']}  launched={metrics['launched']}  "
+            f"intercepted={metrics['intercepted']}  failed={metrics['failed']}  "
+            f"unassigned={metrics['unassigned']}",
             True,
             (0, 0, 0),
         ),
@@ -252,7 +264,7 @@ while running:
     )
 
     if not started:
-        panel = pygame.Rect(250, 125, 600, 215)
+        panel = pygame.Rect(250, 125, 600, 235)
         pygame.draw.rect(screen, (235, 242, 252), panel)
         pygame.draw.rect(screen, (0, 70, 150), panel, 2)
         screen.blit(
@@ -277,15 +289,23 @@ while running:
         )
         screen.blit(
             font.render(
+                f"Launch interval: {config.LAUNCH_INTERVAL:.1f}s per balloon",
+                True,
+                (0, 0, 0),
+            ),
+            (panel.x + 55, panel.y + 157),
+        )
+        screen.blit(
+            font.render(
                 f"Seed: {simulation.seed}    Arrival: {mode}",
                 True,
                 (0, 0, 0),
             ),
-            (panel.x + 55, panel.y + 160),
+            (panel.x + 55, panel.y + 185),
         )
         screen.blit(
             font.render("Press ENTER to start", True, (0, 100, 0)),
-            (panel.x + 205, panel.y + 190),
+            (panel.x + 205, panel.y + 210),
         )
     elif paused:
         screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 100))
