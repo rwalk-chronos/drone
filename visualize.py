@@ -8,7 +8,7 @@ from simulation import Simulation
 
 pygame.init()
 screen = pygame.display.set_mode((config.WINDOW_WIDTH, config.WINDOW_HEIGHT))
-pygame.display.set_caption("Multi-Drone Response Simulation")
+pygame.display.set_caption("Randomized Multi-Drone Response Simulation")
 clock = pygame.time.Clock()
 font = pygame.font.SysFont(None, 24)
 small_font = pygame.font.SysFont(None, 20)
@@ -65,6 +65,18 @@ while running:
             simulation.adjust_interceptor_speed(5.0)
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
             simulation.adjust_interceptor_speed(-5.0)
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_RIGHTBRACKET:
+            simulation.set_target_count(simulation.target_count + 1)
+            paused = False
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_LEFTBRACKET:
+            simulation.set_target_count(simulation.target_count - 1)
+            paused = False
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_n:
+            simulation.new_seed()
+            paused = False
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_s:
+            simulation.toggle_staggered_arrival()
+            paused = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
             simulation.reset()
             paused = False
@@ -92,6 +104,9 @@ while running:
     )
 
     for target in simulation.targets:
+        if not target["spawned"]:
+            continue
+
         if len(target["path"]) > 1:
             pygame.draw.lines(
                 screen,
@@ -132,6 +147,9 @@ while running:
         )
 
     for target in simulation.targets:
+        if not target["spawned"]:
+            continue
+
         position = to_screen(target["x"], target["y"])
         resolved = target["status"] in ("INTERCEPT", "FAILED")
         if target["status"] == "INTERCEPT":
@@ -155,7 +173,11 @@ while running:
         )
 
         if show_vectors and not resolved:
-            vector_color = (220, 120, 0) if target["status"] == "UNASSIGNED" else (180, 0, 0)
+            vector_color = (
+                (220, 120, 0)
+                if target["status"] == "UNASSIGNED"
+                else (180, 0, 0)
+            )
             draw_vector(target, target["vx"], target["vy"], vector_color)
 
         interceptor = target["interceptor"]
@@ -178,11 +200,11 @@ while running:
                 )
 
     metrics = simulation.metrics()
+    mode = "staggered" if simulation.staggered_arrival else "simultaneous"
     screen.blit(
         font.render(
-            f"t={simulation.time:.1f}s  targets={metrics['targets']}  "
-            f"launched={metrics['launched']}  intercepted={metrics['intercepted']}  "
-            f"failed={metrics['failed']}  unassigned={metrics['unassigned']}",
+            f"t={simulation.time:.1f}s  seed={simulation.seed}  mode={mode}  "
+            f"targets={metrics['targets']}  waiting={metrics['waiting']}",
             True,
             (0, 0, 0),
         ),
@@ -190,28 +212,38 @@ while running:
     )
     screen.blit(
         font.render(
-            "Space=pause  R=restart  V=vectors  UP/DOWN=interceptor speed",
+            f"launched={metrics['launched']}  intercepted={metrics['intercepted']}  "
+            f"failed={metrics['failed']}  unassigned={metrics['unassigned']}",
             True,
             (0, 0, 0),
         ),
-        (20, 50),
+        (20, 46),
+    )
+    screen.blit(
+        small_font.render(
+            "[ / ] targets   N new seed   S stagger/simultaneous   "
+            "R replay   Space pause   V vectors   UP/DOWN speed",
+            True,
+            (0, 0, 0),
+        ),
+        (20, 74),
     )
 
     if paused:
-        screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 80))
+        screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 100))
 
     if simulation.complete:
         summary = (
             f"RUN COMPLETE: {metrics['intercepted']} intercepted, "
             f"{metrics['failed']} failed, {metrics['unassigned']} were unassigned"
         )
-        screen.blit(font.render(summary, True, (0, 120, 0)), (20, 80))
+        screen.blit(font.render(summary, True, (0, 120, 0)), (20, 100))
 
     screen.blit(font.render("Event Log", True, (0, 0, 0)), (820, 20))
-    for index, message in enumerate(simulation.event_log[-12:]):
+    for index, message in enumerate(simulation.event_log[-14:]):
         screen.blit(
             small_font.render(message, True, (0, 0, 0)),
-            (820, 50 + index * 22),
+            (820, 50 + index * 21),
         )
 
     pygame.display.flip()
