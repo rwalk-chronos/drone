@@ -1,6 +1,7 @@
 """Core kinematic simulation engine, independent of Pygame rendering."""
 
 import math
+import random
 from copy import deepcopy
 
 import config
@@ -15,12 +16,44 @@ def distance(a, b):
 
 class Simulation:
     def __init__(self):
+        self.target_count = config.DEFAULT_TARGET_COUNT
+        self.seed = config.DEFAULT_RANDOM_SEED
+        self.staggered_arrival = config.DEFAULT_STAGGERED_ARRIVAL
         self.reset("Simulation started")
+
+    def generate_target_templates(self):
+        rng = random.Random(self.seed)
+        templates = []
+
+        for _ in range(self.target_count):
+            speed = rng.uniform(*config.TARGET_SPEED_RANGE)
+            horizontal_limit = speed * config.TARGET_HORIZONTAL_FRACTION
+            vx = rng.uniform(-horizontal_limit, horizontal_limit)
+            vy = -math.sqrt(max(speed * speed - vx * vx, 0.0))
+            spawn_time = (
+                rng.uniform(0.0, config.MAX_SPAWN_DELAY)
+                if self.staggered_arrival
+                else 0.0
+            )
+            templates.append(
+                {
+                    "x": rng.uniform(*config.TARGET_START_X_RANGE),
+                    "y": rng.uniform(*config.TARGET_START_Y_RANGE),
+                    "vx": vx,
+                    "vy": vy,
+                    "spawn_time": spawn_time,
+                }
+            )
+
+        return templates
 
     def reset(self, message="Simulation restarted"):
         self.time = 0.0
         self.complete = False
-        self.event_log = [message]
+        self.event_log = [
+            f"{message} | seed={self.seed} targets={self.target_count} "
+            f"staggered={self.staggered_arrival}"
+        ]
         self.balloons = []
         for template in config.BALLOON_TEMPLATES:
             balloon = deepcopy(template)
@@ -28,12 +61,13 @@ class Simulation:
             self.balloons.append(balloon)
 
         self.targets = []
-        for index, template in enumerate(config.TARGET_TEMPLATES, start=1):
+        for index, template in enumerate(self.generate_target_templates(), start=1):
             target = deepcopy(template)
             target.update(
                 {
                     "id": index,
-                    "status": "SEARCHING",
+                    "status": "WAITING" if target["spawn_time"] > 0 else "SEARCHING",
+                    "spawned": target["spawn_time"] <= 0,
                     "detected": False,
                     "unassigned": False,
                     "launch_time": None,
@@ -44,6 +78,21 @@ class Simulation:
                 }
             )
             self.targets.append(target)
+
+    def set_target_count(self, count):
+        self.target_count = max(
+            config.MIN_TARGET_COUNT,
+            min(config.MAX_TARGET_COUNT, count),
+        )
+        self.reset("Target count changed")
+
+    def new_seed(self):
+        self.seed += 1
+        self.reset("New randomized scenario")
+
+    def toggle_staggered_arrival(self):
+        self.staggered_arrival = not self.staggered_arrival
+        self.reset("Arrival mode changed")
 
     def adjust_interceptor_speed(self, delta):
         for target in self.targets:
@@ -88,6 +137,13 @@ class Simulation:
     def update_target(self, target, dt):
         if target["status"] in TERMINAL_STATUSES:
             return
+
+        if not target["spawned"]:
+            if self.time < target["spawn_time"]:
+                return
+            target["spawned"] = True
+            target["status"] = "SEARCHING"
+            self.event_log.append(f"T{target['id']} entered at {self.time:.1f}s")
 
         target["x"] += target["vx"] * dt
         target["y"] += target["vy"] * dt
@@ -158,6 +214,7 @@ class Simulation:
     def metrics(self):
         return {
             "targets": len(self.targets),
+            "waiting": sum(1 for target in self.targets if not target["spawned"]),
             "launched": sum(
                 1
                 for target in self.targets
