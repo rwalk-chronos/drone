@@ -6,7 +6,7 @@ from copy import deepcopy
 import config
 
 
-TERMINAL_STATUSES = {"INTERCEPT", "FAILED", "UNASSIGNED"}
+TERMINAL_STATUSES = {"INTERCEPT", "FAILED"}
 
 
 def distance(a, b):
@@ -35,6 +35,7 @@ class Simulation:
                     "id": index,
                     "status": "SEARCHING",
                     "detected": False,
+                    "unassigned": False,
                     "launch_time": None,
                     "selected_balloon": None,
                     "path": [],
@@ -97,13 +98,16 @@ class Simulation:
                 distance(target, balloon) <= config.DETECTION_RANGE
                 for balloon in self.balloons
             )
-            if in_any_detection_zone and not self.assign_interceptor(target):
-                target["status"] = "UNASSIGNED"
-                target["resolved_time"] = self.time
-                self.event_log.append(
-                    f"T{target['id']} unassigned: no inventory"
-                )
-                return
+            if in_any_detection_zone:
+                if self.assign_interceptor(target):
+                    target["unassigned"] = False
+                elif not target["unassigned"]:
+                    target["unassigned"] = True
+                    target["detected"] = True
+                    target["status"] = "UNASSIGNED"
+                    self.event_log.append(
+                        f"T{target['id']} unassigned: no inventory"
+                    )
 
         interceptor = target["interceptor"]
         if (
@@ -167,6 +171,6 @@ class Simulation:
                 1 for target in self.targets if target["status"] == "FAILED"
             ),
             "unassigned": sum(
-                1 for target in self.targets if target["status"] == "UNASSIGNED"
+                1 for target in self.targets if target["unassigned"]
             ),
         }
