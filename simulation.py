@@ -24,6 +24,10 @@ def normalize_angle(angle):
     return angle
 
 
+def clamp(value, low=0.0, high=1.0):
+    return max(low, min(high, value))
+
+
 class Simulation:
     def __init__(self):
         self.target_count = config.DEFAULT_TARGET_COUNT
@@ -84,6 +88,7 @@ class Simulation:
         for index, template in enumerate(self.generate_target_templates(), start=1):
             target = deepcopy(template)
             maneuver_rng = random.Random(self.seed * 1000 + index)
+            sensor_rng = random.Random(self.seed * 100000 + index)
             target.update(
                 {
                     "id": index,
@@ -103,8 +108,10 @@ class Simulation:
                     "resolved_time": None,
                     "reservation_released": False,
                     "maneuver_rng": maneuver_rng,
+                    "sensor_rng": sensor_rng,
                     "next_maneuver_time": target["spawn_time"]
                     + maneuver_rng.uniform(*config.MANEUVER_INTERVAL_RANGE),
+                    "last_maneuver_time": None,
                     "maneuver_count": 0,
                 }
             )
@@ -149,7 +156,12 @@ class Simulation:
 
         if not target["ground_detected"] and target["y"] <= config.GROUND_SENSOR_DETECTION_Y:
             target["ground_detected"] = True
-            target["track_available_time"] = self.time + config.GROUND_TRACK_DELAY
+            jitter = target["sensor_rng"].uniform(
+                -config.GROUND_TRACK_DELAY_JITTER,
+                config.GROUND_TRACK_DELAY_JITTER,
+            )
+            delay = max(0.0, config.GROUND_TRACK_DELAY + jitter)
+            target["track_available_time"] = self.time + delay
             self.event_log.append(
                 f"T{target['id']} ground detected at {self.time:.1f}s; "
                 f"track ready {target['track_available_time']:.1f}s"
@@ -237,6 +249,11 @@ class Simulation:
             "onboard_locked": False,
             "ever_locked": False,
             "lost_since": None,
+            "next_sensor_update": 0.0,
+            "last_detection_probability": 0.0,
+            "positive_observations": 0,
+            "negative_observations": 0,
+            "sensor_rng": random.Random(self.seed * 1000000 + target["id"]),
             "aim_point": None,
             "hard_turn_remaining": config.INTERCEPTOR_HARD_TURN_MAX_SECONDS,
             "hard_turn_cooldown_until": 0.0,
@@ -290,6 +307,7 @@ class Simulation:
             interceptor["launched"] = True
             interceptor["launch_time"] = self.time
             interceptor["engage_time"] = self.time + config.INTERCEPTOR_STABILIZATION_TIME
+            interceptor["next_sensor_update"] = interceptor["engage_time"]
             target["status"] = "STABILIZING"
             balloon["next_launch_time"] = self.time + config.LAUNCH_INTERVAL
             self.event_log.append(
@@ -306,6 +324,7 @@ class Simulation:
         target["vx"] = rng.uniform(-horizontal_limit, horizontal_limit)
         target["vy"] = -math.sqrt(max(speed * speed - target["vx"] * target["vx"], 0.0))
         target["maneuver_count"] += 1
+        target["last_maneuver_time"] = self.time
         target["next_maneuver_time"] = self.time + rng.uniform(*config.MANEUVER_INTERVAL_RANGE)
 
     def nearby_target_count(self, target):
@@ -318,6 +337,41 @@ class Simulation:
             and distance(target, other) <= config.ONBOARD_CLUTTER_RADIUS
         )
 
+    def observation_probability(self, target, interceptor):
+        current_range = distance(target, interceptor)
+        if current_range > config.ONBOARD_ACQUISITION_RANGE:
+            return 0.0
+
+        range_ratio = clamp(current_range / config.ONBOARD_ACQUISITION_RANGE)
+        range_factor = max(
+            0.0,
+            1.0 - range_ratio ** config.ONBOARD_RANGE_FALLOFF_EXPONENT,
+        )
+        clutter = self.nearby_target_count(target)
+        clutter_factor = max(
+            0.05,
+            1.0 - clutter * config.ONBOARD_CLUTTER_PENALTY_PER_TARGET,
+        )
+        maneuver_factor = 1.0
+        if (
+            target["last_maneuver_time"] is not None
+            and self.time - target["last_maneuver_time"] <= 1.5
+        ):
+            maneuver_factor -= config.ONBOARD_MANEUVER_PENALTY
+
+        probability = (
+            config.ONBOARD_BASE_DETECTION_PROBABILITY
+            * config.ONBOARD_VISIBILITY_FACTOR
+            * range_factor
+            * clutter_factor
+            * maneuver_factor
+        )
+        probability += interceptor["sensor_rng"].gauss(
+            0.0,
+            config.ONBOARD_OBSERVATION_NOISE_STD,
+        )
+        return clamp(probability)
+
     def update_onboard_tracking(self, target, interceptor, dt):
         if not config.ONBOARD_TRACKING_ENABLED:
             interceptor["onboard_locked"] = True
@@ -325,24 +379,33 @@ class Simulation:
             interceptor["track_confidence"] = 1.0
             return True
 
-        in_range = distance(target, interceptor) <= config.ONBOARD_ACQUISITION_RANGE
-        clutter = self.nearby_target_count(target)
-        gain = max(
-            0.0,
-            config.ONBOARD_CONFIDENCE_GAIN_PER_SEC
-            - clutter * config.ONBOARD_CLUTTER_PENALTY_PER_TARGET,
-        )
+        if self.time >= interceptor["next_sensor_update"]:
+            probability = self.observation_probability(target, interceptor)
+            interceptor["last_detection_probability"] = probability
+            observed = interceptor["sensor_rng"].random() <= probability
+            interceptor["next_sensor_update"] = (
+                self.time + config.ONBOARD_SENSOR_UPDATE_INTERVAL
+            )
 
-        if in_range:
-            interceptor["track_confidence"] = min(
-                1.0, interceptor["track_confidence"] + gain * dt
-            )
-        else:
-            interceptor["track_confidence"] = max(
-                0.0,
-                interceptor["track_confidence"]
-                - config.ONBOARD_CONFIDENCE_DECAY_PER_SEC * dt,
-            )
+            if observed:
+                interceptor["positive_observations"] += 1
+                confidence = interceptor["track_confidence"]
+                interceptor["track_confidence"] = clamp(
+                    confidence
+                    + config.ONBOARD_POSITIVE_UPDATE_GAIN * (1.0 - confidence)
+                )
+                interceptor["last_target_point"] = {
+                    "x": target["x"],
+                    "y": target["y"],
+                }
+                interceptor["last_track_time"] = self.time
+            else:
+                interceptor["negative_observations"] += 1
+                confidence = interceptor["track_confidence"]
+                interceptor["track_confidence"] = clamp(
+                    confidence
+                    - config.ONBOARD_NEGATIVE_UPDATE_DECAY * (0.5 + confidence)
+                )
 
         was_locked = interceptor["onboard_locked"]
         if interceptor["track_confidence"] >= config.ONBOARD_LOCK_THRESHOLD:
@@ -353,12 +416,10 @@ class Simulation:
             if not was_locked:
                 self.event_log.append(
                     f"I{interceptor['id']} acquired track T{target['id']} at "
-                    f"{self.time:.1f}s confidence={interceptor['track_confidence']:.2f}"
+                    f"{self.time:.1f}s confidence={interceptor['track_confidence']:.2f} "
+                    f"p={interceptor['last_detection_probability']:.2f}"
                 )
-        elif (
-            was_locked
-            and interceptor["track_confidence"] <= config.ONBOARD_LOSS_THRESHOLD
-        ):
+        elif was_locked and interceptor["track_confidence"] <= config.ONBOARD_LOSS_THRESHOLD:
             interceptor["onboard_locked"] = False
             interceptor["lost_since"] = self.time
             interceptor["tracking_status"] = "REACQUIRING"
