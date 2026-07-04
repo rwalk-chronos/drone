@@ -77,6 +77,10 @@ while running:
             simulation.cycle_guidance_mode()
             started = False
             paused = False
+        elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
+            simulation.cycle_maneuver_mode()
+            started = False
+            paused = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_1:
             simulation_rate = 1.0
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_2:
@@ -143,7 +147,6 @@ while running:
     for target in simulation.targets:
         if not target["spawned"]:
             continue
-
         if len(target["path"]) > 1:
             pygame.draw.lines(
                 screen,
@@ -152,7 +155,6 @@ while running:
                 [to_screen(x, y) for x, y in target["path"]],
                 2,
             )
-
         interceptor = target["interceptor"]
         if interceptor is not None and len(interceptor["path"]) > 1:
             pygame.draw.lines(
@@ -174,14 +176,12 @@ while running:
         position = to_screen(balloon["x"], balloon["y"])
         active = balloon["id"] in active_balloon_ids
         pygame.draw.circle(screen, (0, 160, 0), position, 13 if active else 10)
-
         queue_length = len(balloon["queue"])
         if queue_length:
             countdown = max(0.0, balloon["next_launch_time"] - simulation.time)
             queue_text = f" q={queue_length} next={countdown:.1f}s"
         else:
             queue_text = " q=0"
-
         label = (
             f"B{balloon['id']} inv={balloon['inventory']}{queue_text}"
             + (" ACTIVE" if active else "")
@@ -241,7 +241,13 @@ while running:
             )
             if interceptor.get("aim_point") is not None and show_vectors:
                 aim = interceptor["aim_point"]
-                pygame.draw.circle(screen, (0, 0, 120), to_screen(aim["x"], aim["y"]), 4, 1)
+                pygame.draw.circle(
+                    screen,
+                    (0, 0, 120),
+                    to_screen(aim["x"], aim["y"]),
+                    4,
+                    1,
+                )
             if show_vectors and not resolved:
                 draw_vector(
                     interceptor,
@@ -251,12 +257,13 @@ while running:
                 )
 
     metrics = simulation.metrics()
-    mode = "staggered" if simulation.staggered_arrival else "simultaneous"
+    arrival_mode = "staggered" if simulation.staggered_arrival else "simultaneous"
     guidance_label = guidance.mode_label(simulation.guidance_mode)
     screen.blit(
         font.render(
             f"t={simulation.time:.1f}s  rate={simulation_rate:g}x  seed={simulation.seed}  "
-            f"mode={mode}  guidance={guidance_label}",
+            f"arrival={arrival_mode}  guidance={guidance_label}  "
+            f"maneuver={simulation.maneuver_mode}",
             True,
             (0, 0, 0),
         ),
@@ -264,10 +271,10 @@ while running:
     )
     screen.blit(
         font.render(
-            f"targets={metrics['targets']}  waiting={metrics['waiting']}  "
-            f"queued={metrics['queued']}  launched={metrics['launched']}  "
-            f"intercepted={metrics['intercepted']}  failed={metrics['failed']}  "
-            f"unassigned={metrics['unassigned']}  speed={simulation.interceptor_speed:.0f} yd/s",
+            f"targets={metrics['targets']} waiting={metrics['waiting']} queued={metrics['queued']} "
+            f"launched={metrics['launched']} intercepted={metrics['intercepted']} "
+            f"failed={metrics['failed']} unassigned={metrics['unassigned']} "
+            f"maneuvers={metrics['maneuvers']} speed={simulation.interceptor_speed:.0f} yd/s",
             True,
             (0, 0, 0),
         ),
@@ -275,8 +282,8 @@ while running:
     )
     screen.blit(
         small_font.render(
-            "LEFT/RIGHT targets   G guidance   N seed   S arrival   ENTER start   "
-            "R reset   Space pause   V vectors   UP/DOWN speed   1/2/3/4 time scale",
+            "LEFT/RIGHT targets  G guidance  M maneuvers  N seed  S arrival  ENTER start  "
+            "R reset  Space pause  V vectors  UP/DOWN speed  1/2/3/4 time scale",
             True,
             (0, 0, 0),
         ),
@@ -284,64 +291,28 @@ while running:
     )
 
     if not started:
-        panel = pygame.Rect(230, 125, 640, 285)
+        panel = pygame.Rect(220, 115, 660, 325)
         pygame.draw.rect(screen, (235, 242, 252), panel)
         pygame.draw.rect(screen, (0, 70, 150), panel, 2)
         screen.blit(
             large_font.render("SETUP MODE", True, (0, 70, 150)),
-            (panel.x + 230, panel.y + 18),
+            (panel.x + 240, panel.y + 18),
         )
-        screen.blit(
-            large_font.render(
-                f"Target count: {simulation.target_count}",
-                True,
-                (0, 0, 0),
-            ),
-            (panel.x + 55, panel.y + 70),
-        )
-        screen.blit(
-            large_font.render(
-                f"Guidance: {guidance_label}",
-                True,
-                (0, 0, 0),
-            ),
-            (panel.x + 55, panel.y + 110),
-        )
-        screen.blit(
-            large_font.render(
-                f"Interceptor speed: {simulation.interceptor_speed:.0f} yd/s",
-                True,
-                (0, 0, 0),
-            ),
-            (panel.x + 55, panel.y + 150),
-        )
-        screen.blit(
-            font.render(
-                f"Time scale: {simulation_rate:g}x (1 = real time)",
-                True,
-                (0, 0, 0),
-            ),
-            (panel.x + 55, panel.y + 190),
-        )
-        screen.blit(
-            font.render(
-                f"Launch interval: {config.LAUNCH_INTERVAL:.1f}s per balloon",
-                True,
-                (0, 0, 0),
-            ),
-            (panel.x + 55, panel.y + 220),
-        )
-        screen.blit(
-            font.render(
-                f"Seed: {simulation.seed}    Arrival: {mode}",
-                True,
-                (0, 0, 0),
-            ),
-            (panel.x + 55, panel.y + 248),
-        )
+        setup_lines = [
+            f"Target count: {simulation.target_count}",
+            f"Guidance: {guidance_label}",
+            f"Target maneuvers: {simulation.maneuver_mode}",
+            f"Interceptor speed: {simulation.interceptor_speed:.0f} yd/s",
+            f"Time scale: {simulation_rate:g}x (1 = real time)",
+            f"Launch interval: {config.LAUNCH_INTERVAL:.1f}s per balloon",
+            f"Seed: {simulation.seed}    Arrival: {arrival_mode}",
+        ]
+        for index, line in enumerate(setup_lines):
+            rendered = large_font.render(line, True, (0, 0, 0)) if index < 4 else font.render(line, True, (0, 0, 0))
+            screen.blit(rendered, (panel.x + 55, panel.y + 68 + index * 36))
         screen.blit(
             font.render("Press ENTER to start", True, (0, 100, 0)),
-            (panel.x + 225, panel.y + 267),
+            (panel.x + 235, panel.y + 298),
         )
     elif paused:
         screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 100))
