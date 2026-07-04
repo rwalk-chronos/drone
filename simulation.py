@@ -9,6 +9,7 @@ import guidance
 
 
 TERMINAL_STATUSES = {"INTERCEPT", "FAILED"}
+MANEUVER_MODES = ["straight", "random"]
 
 
 def distance(a, b):
@@ -22,6 +23,7 @@ class Simulation:
         self.staggered_arrival = config.DEFAULT_STAGGERED_ARRIVAL
         self.interceptor_speed = config.INITIAL_INTERCEPTOR_SPEED
         self.guidance_mode = config.DEFAULT_GUIDANCE_MODE
+        self.maneuver_mode = config.DEFAULT_MANEUVER_MODE
         self.reset("Simulation started")
 
     def generate_target_templates(self):
@@ -44,6 +46,7 @@ class Simulation:
                     "y": rng.uniform(*config.TARGET_START_Y_RANGE),
                     "vx": vx,
                     "vy": vy,
+                    "speed": speed,
                     "spawn_time": spawn_time,
                 }
             )
@@ -56,7 +59,7 @@ class Simulation:
         self.event_log = [
             f"{message} | seed={self.seed} targets={self.target_count} "
             f"speed={self.interceptor_speed:.0f} guidance={self.guidance_mode} "
-            f"staggered={self.staggered_arrival}"
+            f"maneuver={self.maneuver_mode} staggered={self.staggered_arrival}"
         ]
 
         self.balloons = []
@@ -74,6 +77,7 @@ class Simulation:
         self.targets = []
         for index, template in enumerate(self.generate_target_templates(), start=1):
             target = deepcopy(template)
+            maneuver_rng = random.Random(self.seed * 1000 + index)
             target.update(
                 {
                     "id": index,
@@ -88,6 +92,10 @@ class Simulation:
                     "ready_time": None,
                     "resolved_time": None,
                     "reservation_released": False,
+                    "maneuver_rng": maneuver_rng,
+                    "next_maneuver_time": target["spawn_time"]
+                    + maneuver_rng.uniform(*config.MANEUVER_INTERVAL_RANGE),
+                    "maneuver_count": 0,
                 }
             )
             self.targets.append(target)
@@ -112,6 +120,11 @@ class Simulation:
         current_index = modes.index(self.guidance_mode)
         self.guidance_mode = modes[(current_index + 1) % len(modes)]
         self.reset("Guidance mode changed")
+
+    def cycle_maneuver_mode(self):
+        current_index = MANEUVER_MODES.index(self.maneuver_mode)
+        self.maneuver_mode = MANEUVER_MODES[(current_index + 1) % len(MANEUVER_MODES)]
+        self.reset("Target maneuver mode changed")
 
     def adjust_interceptor_speed(self, delta):
         self.interceptor_speed = max(5.0, self.interceptor_speed + delta)
@@ -219,6 +232,20 @@ class Simulation:
                 f"next slot {balloon['next_launch_time']:.1f}s"
             )
 
+    def apply_target_maneuver(self, target):
+        if self.maneuver_mode != "random" or self.time < target["next_maneuver_time"]:
+            return
+
+        rng = target["maneuver_rng"]
+        speed = target["speed"]
+        horizontal_limit = speed * config.MANEUVER_HORIZONTAL_FRACTION
+        target["vx"] = rng.uniform(-horizontal_limit, horizontal_limit)
+        target["vy"] = -math.sqrt(max(speed * speed - target["vx"] * target["vx"], 0.0))
+        target["maneuver_count"] += 1
+        target["next_maneuver_time"] = self.time + rng.uniform(
+            *config.MANEUVER_INTERVAL_RANGE
+        )
+
     def move_interceptor(self, target, interceptor, dt):
         aim = guidance.aim_point(
             self.guidance_mode,
@@ -248,6 +275,8 @@ class Simulation:
             target["spawned"] = True
             target["status"] = "SEARCHING"
             self.event_log.append(f"T{target['id']} entered at {self.time:.1f}s")
+
+        self.apply_target_maneuver(target)
 
         target["x"] += target["vx"] * dt
         target["y"] += target["vy"] * dt
@@ -321,4 +350,5 @@ class Simulation:
             "unassigned": sum(
                 1 for target in self.targets if target["unassigned"]
             ),
+            "maneuvers": sum(target["maneuver_count"] for target in self.targets),
         }
