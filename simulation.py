@@ -162,9 +162,7 @@ class Simulation:
         ):
             target["track_available"] = True
             target["status"] = "TRACKED"
-            self.event_log.append(
-                f"T{target['id']} track available at {self.time:.1f}s"
-            )
+            self.event_log.append(f"T{target['id']} track available at {self.time:.1f}s")
 
     def has_track_for_assignment(self, target):
         if config.GROUND_CUEING_ENABLED:
@@ -180,10 +178,8 @@ class Simulation:
         return max((config.FOB_LINE_Y - target["y"]) / target["vy"], 0.0)
 
     def balloon_score(self, balloon, target):
-        queue_delay = max(
-            0.0,
-            balloon["next_launch_time"] - self.time,
-        ) + len(balloon["queue"]) * config.LAUNCH_INTERVAL
+        queue_delay = max(0.0, balloon["next_launch_time"] - self.time)
+        queue_delay += len(balloon["queue"]) * config.LAUNCH_INTERVAL
         travel_time = distance(target, balloon) / max(self.interceptor_speed, 1e-6)
         inventory_used = config.INTERCEPTORS_PER_BALLOON - balloon["inventory"]
         return (
@@ -193,9 +189,7 @@ class Simulation:
         )
 
     def available_balloons_for_assignment(self, target):
-        candidates = [
-            balloon for balloon in self.balloons if balloon["inventory"] > 0
-        ]
+        candidates = [balloon for balloon in self.balloons if balloon["inventory"] > 0]
         if not config.GLOBAL_ASSIGNMENT_ENABLED:
             candidates = [
                 balloon
@@ -221,6 +215,7 @@ class Simulation:
         target["ready_time"] = self.time + config.LAUNCH_DELAY
         target["interceptor"] = {
             "id": target["id"],
+            "assigned_track_id": target["id"],
             "x": balloon["x"],
             "y": balloon["y"],
             "vx": 0.0,
@@ -238,6 +233,10 @@ class Simulation:
             "last_target_point": None,
             "last_track_time": self.time,
             "tracking_status": "QUEUED",
+            "track_confidence": config.ONBOARD_INITIAL_CONFIDENCE,
+            "onboard_locked": False,
+            "ever_locked": False,
+            "lost_since": None,
             "aim_point": None,
             "hard_turn_remaining": config.INTERCEPTOR_HARD_TURN_MAX_SECONDS,
             "hard_turn_cooldown_until": 0.0,
@@ -309,6 +308,71 @@ class Simulation:
         target["maneuver_count"] += 1
         target["next_maneuver_time"] = self.time + rng.uniform(*config.MANEUVER_INTERVAL_RANGE)
 
+    def nearby_target_count(self, target):
+        return sum(
+            1
+            for other in self.targets
+            if other is not target
+            and other["spawned"]
+            and other["status"] not in TERMINAL_STATUSES
+            and distance(target, other) <= config.ONBOARD_CLUTTER_RADIUS
+        )
+
+    def update_onboard_tracking(self, target, interceptor, dt):
+        if not config.ONBOARD_TRACKING_ENABLED:
+            interceptor["onboard_locked"] = True
+            interceptor["tracking_status"] = "LOCKED"
+            interceptor["track_confidence"] = 1.0
+            return True
+
+        in_range = distance(target, interceptor) <= config.ONBOARD_ACQUISITION_RANGE
+        clutter = self.nearby_target_count(target)
+        gain = max(
+            0.0,
+            config.ONBOARD_CONFIDENCE_GAIN_PER_SEC
+            - clutter * config.ONBOARD_CLUTTER_PENALTY_PER_TARGET,
+        )
+
+        if in_range:
+            interceptor["track_confidence"] = min(
+                1.0, interceptor["track_confidence"] + gain * dt
+            )
+        else:
+            interceptor["track_confidence"] = max(
+                0.0,
+                interceptor["track_confidence"]
+                - config.ONBOARD_CONFIDENCE_DECAY_PER_SEC * dt,
+            )
+
+        was_locked = interceptor["onboard_locked"]
+        if interceptor["track_confidence"] >= config.ONBOARD_LOCK_THRESHOLD:
+            interceptor["onboard_locked"] = True
+            interceptor["ever_locked"] = True
+            interceptor["lost_since"] = None
+            interceptor["tracking_status"] = "LOCKED"
+            if not was_locked:
+                self.event_log.append(
+                    f"I{interceptor['id']} acquired track T{target['id']} at "
+                    f"{self.time:.1f}s confidence={interceptor['track_confidence']:.2f}"
+                )
+        elif (
+            was_locked
+            and interceptor["track_confidence"] <= config.ONBOARD_LOSS_THRESHOLD
+        ):
+            interceptor["onboard_locked"] = False
+            interceptor["lost_since"] = self.time
+            interceptor["tracking_status"] = "REACQUIRING"
+            self.event_log.append(
+                f"I{interceptor['id']} lost track T{target['id']} at "
+                f"{self.time:.1f}s confidence={interceptor['track_confidence']:.2f}"
+            )
+        elif interceptor["ever_locked"] and not interceptor["onboard_locked"]:
+            interceptor["tracking_status"] = "REACQUIRING"
+        else:
+            interceptor["tracking_status"] = "ACQUIRING"
+
+        return interceptor["onboard_locked"]
+
     def turn_rate_for(self, interceptor, heading_error, dt):
         hard_turn_requested = (
             abs(math.degrees(heading_error)) >= config.INTERCEPTOR_HARD_TURN_TRIGGER_DEG
@@ -355,7 +419,7 @@ class Simulation:
         interceptor["y"] += interceptor["vy"] * dt
         interceptor["path"].append((interceptor["x"], interceptor["y"]))
 
-    def expire_interceptor(self, target, interceptor):
+    def expire_interceptor(self, target, interceptor, reason="missed"):
         interceptor["expired"] = True
         target["missed"] = True
         target["status"] = "UNASSIGNED"
@@ -364,7 +428,7 @@ class Simulation:
         target["selected_balloon"] = None
         target["detected"] = True
         self.event_log.append(
-            f"I{interceptor['id']} missed T{target['id']} at {self.time:.1f}s"
+            f"I{interceptor['id']} {reason} T{target['id']} at {self.time:.1f}s"
         )
 
     def update_target(self, target, dt):
@@ -398,23 +462,35 @@ class Simulation:
         interceptor = target["interceptor"]
         if interceptor is not None and interceptor["launched"]:
             if self.time - interceptor["launch_time"] >= config.INTERCEPTOR_MAX_FLIGHT_TIME:
-                self.expire_interceptor(target, interceptor)
+                self.expire_interceptor(target, interceptor, "timed out on")
             elif self.time < interceptor["engage_time"]:
                 target["status"] = "STABILIZING"
                 interceptor["tracking_status"] = "STABILIZING"
             else:
                 if not interceptor["stabilized"]:
                     interceptor["stabilized"] = True
-                    target["status"] = "LAUNCHED"
+                    target["status"] = "ACQUIRING"
                     self.event_log.append(
-                        f"I{interceptor['id']} stabilized and engaged at {self.time:.1f}s"
+                        f"I{interceptor['id']} stabilized; onboard acquisition started at "
+                        f"{self.time:.1f}s"
                     )
+
+                locked = self.update_onboard_tracking(target, interceptor, dt)
+                target["status"] = "LAUNCHED" if locked else interceptor["tracking_status"]
                 self.move_interceptor(target, interceptor, dt)
-                if distance(target, interceptor) <= config.SUCCESS_RADIUS:
+
+                if (
+                    interceptor["lost_since"] is not None
+                    and self.time - interceptor["lost_since"]
+                    > config.ONBOARD_REACQUIRE_WINDOW_SECONDS
+                ):
+                    self.expire_interceptor(target, interceptor, "failed to reacquire")
+                elif locked and distance(target, interceptor) <= config.SUCCESS_RADIUS:
                     target["status"] = "INTERCEPT"
                     target["resolved_time"] = self.time
                     self.event_log.append(
-                        f"T{target['id']} intercept at {self.time:.1f}s"
+                        f"T{target['id']} intercept at {self.time:.1f}s "
+                        f"confidence={interceptor['track_confidence']:.2f}"
                     )
                     return
 
@@ -442,10 +518,19 @@ class Simulation:
             "tracks": sum(1 for target in self.targets if target["track_available"]),
             "queued": sum(1 for target in self.targets if target["status"] == "QUEUED"),
             "stabilizing": sum(1 for target in self.targets if target["status"] == "STABILIZING"),
+            "acquiring": sum(1 for target in self.targets if target["status"] == "ACQUIRING"),
+            "reacquiring": sum(1 for target in self.targets if target["status"] == "REACQUIRING"),
+            "locked": sum(
+                1
+                for target in self.targets
+                if target["interceptor"] is not None
+                and target["interceptor"].get("onboard_locked")
+            ),
             "launched": sum(
                 1
                 for target in self.targets
-                if target["interceptor"] is not None and target["interceptor"].get("stabilized")
+                if target["interceptor"] is not None
+                and target["interceptor"].get("stabilized")
             ),
             "intercepted": sum(1 for target in self.targets if target["status"] == "INTERCEPT"),
             "failed": sum(1 for target in self.targets if target["status"] == "FAILED"),
