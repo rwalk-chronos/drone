@@ -136,12 +136,34 @@ while running:
             1,
         )
 
+    # Forward balloon picket line
     pygame.draw.line(
         screen,
-        (180, 180, 0),
-        to_screen(-1300, config.PROTECTED_LINE_Y),
-        to_screen(1300, config.PROTECTED_LINE_Y),
+        (0, 130, 0),
+        to_screen(-1300, config.BALLOON_PICKET_Y),
+        to_screen(1300, config.BALLOON_PICKET_Y),
+        2,
+    )
+    screen.blit(
+        small_font.render(
+            f"BALLOON PICKET — {config.BALLOON_PICKET_DISTANCE:.0f} m forward",
+            True,
+            (0, 100, 0),
+        ),
+        to_screen(-1250, config.BALLOON_PICKET_Y + 25),
+    )
+
+    # FOB failure line
+    pygame.draw.line(
+        screen,
+        (180, 0, 0),
+        to_screen(-1300, config.FOB_LINE_Y),
+        to_screen(1300, config.FOB_LINE_Y),
         3,
+    )
+    screen.blit(
+        small_font.render("FOB LINE — crossing = failure", True, (150, 0, 0)),
+        to_screen(-1250, config.FOB_LINE_Y + 25),
     )
 
     for target in simulation.targets:
