@@ -16,6 +16,14 @@ def distance(a, b):
     return math.hypot(a["x"] - b["x"], a["y"] - b["y"])
 
 
+def normalize_angle(angle):
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle < -math.pi:
+        angle += 2.0 * math.pi
+    return angle
+
+
 class Simulation:
     def __init__(self):
         self.target_count = config.DEFAULT_TARGET_COUNT
@@ -29,7 +37,6 @@ class Simulation:
     def generate_target_templates(self):
         rng = random.Random(self.seed)
         templates = []
-
         for _ in range(self.target_count):
             speed = rng.uniform(*config.TARGET_SPEED_RANGE)
             horizontal_limit = speed * config.TARGET_HORIZONTAL_FRACTION
@@ -50,7 +57,6 @@ class Simulation:
                     "spawn_time": spawn_time,
                 }
             )
-
         return templates
 
     def reset(self, message="Simulation restarted"):
@@ -85,6 +91,7 @@ class Simulation:
                     "spawned": target["spawn_time"] <= 0,
                     "detected": False,
                     "unassigned": False,
+                    "missed": False,
                     "selected_balloon": None,
                     "path": [],
                     "history": [],
@@ -101,10 +108,7 @@ class Simulation:
             self.targets.append(target)
 
     def set_target_count(self, count):
-        self.target_count = max(
-            config.MIN_TARGET_COUNT,
-            min(config.MAX_TARGET_COUNT, count),
-        )
+        self.target_count = max(config.MIN_TARGET_COUNT, min(config.MAX_TARGET_COUNT, count))
         self.reset("Target count changed")
 
     def new_seed(self):
@@ -153,6 +157,7 @@ class Simulation:
         balloon["inventory"] -= 1
         balloon["queue"].append(target["id"])
 
+        initial_heading = math.atan2(target["y"] - balloon["y"], target["x"] - balloon["x"])
         target["detected"] = True
         target["unassigned"] = False
         target["status"] = "QUEUED"
@@ -165,7 +170,10 @@ class Simulation:
             "vx": 0.0,
             "vy": 0.0,
             "speed": self.interceptor_speed,
+            "heading": initial_heading,
             "launched": False,
+            "launch_time": None,
+            "expired": False,
             "path": [],
             "waypoint": None,
             "last_target_point": None,
@@ -189,10 +197,7 @@ class Simulation:
             or target["reservation_released"]
         ):
             return
-
-        balloon["queue"] = [
-            target_id for target_id in balloon["queue"] if target_id != target["id"]
-        ]
+        balloon["queue"] = [target_id for target_id in balloon["queue"] if target_id != target["id"]]
         balloon["inventory"] += 1
         target["reservation_released"] = True
         self.event_log.append(
@@ -207,15 +212,11 @@ class Simulation:
                     balloon["queue"].pop(0)
                     continue
                 break
-
             if not balloon["queue"]:
                 continue
 
             target = self.target_by_id(balloon["queue"][0])
-            earliest_launch = max(
-                balloon["next_launch_time"],
-                target["ready_time"] or 0.0,
-            )
+            earliest_launch = max(balloon["next_launch_time"], target["ready_time"] or 0.0)
             if self.time < earliest_launch:
                 continue
 
@@ -225,6 +226,7 @@ class Simulation:
                 continue
 
             interceptor["launched"] = True
+            interceptor["launch_time"] = self.time
             target["status"] = "LAUNCHED"
             balloon["next_launch_time"] = self.time + config.LAUNCH_INTERVAL
             self.event_log.append(
@@ -235,16 +237,13 @@ class Simulation:
     def apply_target_maneuver(self, target):
         if self.maneuver_mode != "random" or self.time < target["next_maneuver_time"]:
             return
-
         rng = target["maneuver_rng"]
         speed = target["speed"]
         horizontal_limit = speed * config.MANEUVER_HORIZONTAL_FRACTION
         target["vx"] = rng.uniform(-horizontal_limit, horizontal_limit)
         target["vy"] = -math.sqrt(max(speed * speed - target["vx"] * target["vx"], 0.0))
         target["maneuver_count"] += 1
-        target["next_maneuver_time"] = self.time + rng.uniform(
-            *config.MANEUVER_INTERVAL_RANGE
-        )
+        target["next_maneuver_time"] = self.time + rng.uniform(*config.MANEUVER_INTERVAL_RANGE)
 
     def move_interceptor(self, target, interceptor, dt):
         aim = guidance.aim_point(
@@ -255,15 +254,28 @@ class Simulation:
             config,
         )
         interceptor["aim_point"] = aim
-        dx = aim["x"] - interceptor["x"]
-        dy = aim["y"] - interceptor["y"]
-        d = math.hypot(dx, dy)
-        if d > 0:
-            interceptor["vx"] = interceptor["speed"] * dx / d
-            interceptor["vy"] = interceptor["speed"] * dy / d
-            interceptor["x"] += interceptor["vx"] * dt
-            interceptor["y"] += interceptor["vy"] * dt
+        desired_heading = math.atan2(aim["y"] - interceptor["y"], aim["x"] - interceptor["x"])
+        heading_error = normalize_angle(desired_heading - interceptor["heading"])
+        max_turn = math.radians(config.INTERCEPTOR_MAX_TURN_RATE_DEG_PER_SEC) * dt
+        heading_change = max(-max_turn, min(max_turn, heading_error))
+        interceptor["heading"] = normalize_angle(interceptor["heading"] + heading_change)
+        interceptor["vx"] = interceptor["speed"] * math.cos(interceptor["heading"])
+        interceptor["vy"] = interceptor["speed"] * math.sin(interceptor["heading"])
+        interceptor["x"] += interceptor["vx"] * dt
+        interceptor["y"] += interceptor["vy"] * dt
         interceptor["path"].append((interceptor["x"], interceptor["y"]))
+
+    def expire_interceptor(self, target, interceptor):
+        interceptor["expired"] = True
+        target["missed"] = True
+        target["status"] = "UNASSIGNED"
+        target["unassigned"] = True
+        target["interceptor"] = None
+        target["selected_balloon"] = None
+        target["detected"] = True
+        self.event_log.append(
+            f"I{interceptor['id']} missed T{target['id']} at {self.time:.1f}s"
+        )
 
     def update_target(self, target, dt):
         if target["status"] in TERMINAL_STATUSES:
@@ -277,7 +289,6 @@ class Simulation:
             self.event_log.append(f"T{target['id']} entered at {self.time:.1f}s")
 
         self.apply_target_maneuver(target)
-
         target["x"] += target["vx"] * dt
         target["y"] += target["vy"] * dt
         target["path"].append((target["x"], target["y"]))
@@ -300,15 +311,17 @@ class Simulation:
 
         interceptor = target["interceptor"]
         if interceptor is not None and interceptor["launched"]:
-            self.move_interceptor(target, interceptor, dt)
-
-            if distance(target, interceptor) <= config.SUCCESS_RADIUS:
-                target["status"] = "INTERCEPT"
-                target["resolved_time"] = self.time
-                self.event_log.append(
-                    f"T{target['id']} intercept at {self.time:.1f}s"
-                )
-                return
+            if self.time - interceptor["launch_time"] >= config.INTERCEPTOR_MAX_FLIGHT_TIME:
+                self.expire_interceptor(target, interceptor)
+            else:
+                self.move_interceptor(target, interceptor, dt)
+                if distance(target, interceptor) <= config.SUCCESS_RADIUS:
+                    target["status"] = "INTERCEPT"
+                    target["resolved_time"] = self.time
+                    self.event_log.append(
+                        f"T{target['id']} intercept at {self.time:.1f}s"
+                    )
+                    return
 
         if target["y"] <= config.PROTECTED_LINE_Y:
             target["status"] = "FAILED"
@@ -319,12 +332,9 @@ class Simulation:
     def step(self, dt=config.DT):
         if self.complete:
             return
-
         self.process_launch_queues()
-
         for target in self.targets:
             self.update_target(target, dt)
-
         self.time += dt
         if all(target["status"] in TERMINAL_STATUSES for target in self.targets):
             self.complete = True
@@ -338,17 +348,11 @@ class Simulation:
             "launched": sum(
                 1
                 for target in self.targets
-                if target["interceptor"] is not None
-                and target["interceptor"]["launched"]
+                if target["interceptor"] is not None and target["interceptor"].get("launched")
             ),
-            "intercepted": sum(
-                1 for target in self.targets if target["status"] == "INTERCEPT"
-            ),
-            "failed": sum(
-                1 for target in self.targets if target["status"] == "FAILED"
-            ),
-            "unassigned": sum(
-                1 for target in self.targets if target["unassigned"]
-            ),
+            "intercepted": sum(1 for target in self.targets if target["status"] == "INTERCEPT"),
+            "failed": sum(1 for target in self.targets if target["status"] == "FAILED"),
+            "unassigned": sum(1 for target in self.targets if target["unassigned"]),
+            "missed": sum(1 for target in self.targets if target["missed"]),
             "maneuvers": sum(target["maneuver_count"] for target in self.targets),
         }
