@@ -90,6 +90,9 @@ class Simulation:
                     "status": "WAITING" if target["spawn_time"] > 0 else "SEARCHING",
                     "spawned": target["spawn_time"] <= 0,
                     "detected": False,
+                    "ground_detected": False,
+                    "track_available": False,
+                    "track_available_time": None,
                     "unassigned": False,
                     "missed": False,
                     "selected_balloon": None,
@@ -140,20 +143,73 @@ class Simulation:
     def target_by_id(self, target_id):
         return next(target for target in self.targets if target["id"] == target_id)
 
-    def available_balloons_in_range(self, target):
-        return [
-            balloon
+    def update_ground_track(self, target):
+        if not config.GROUND_CUEING_ENABLED or not target["spawned"]:
+            return
+
+        if not target["ground_detected"] and target["y"] <= config.GROUND_SENSOR_DETECTION_Y:
+            target["ground_detected"] = True
+            target["track_available_time"] = self.time + config.GROUND_TRACK_DELAY
+            self.event_log.append(
+                f"T{target['id']} ground detected at {self.time:.1f}s; "
+                f"track ready {target['track_available_time']:.1f}s"
+            )
+
+        if (
+            target["ground_detected"]
+            and not target["track_available"]
+            and self.time >= target["track_available_time"]
+        ):
+            target["track_available"] = True
+            target["status"] = "TRACKED"
+            self.event_log.append(
+                f"T{target['id']} track available at {self.time:.1f}s"
+            )
+
+    def has_track_for_assignment(self, target):
+        if config.GROUND_CUEING_ENABLED:
+            return target["track_available"]
+        return any(
+            distance(target, balloon) <= config.DETECTION_RANGE
             for balloon in self.balloons
-            if balloon["inventory"] > 0
-            and distance(target, balloon) <= config.DETECTION_RANGE
+        )
+
+    def estimated_time_to_fob(self, target):
+        if target["vy"] >= 0.0:
+            return float("inf")
+        return max((config.FOB_LINE_Y - target["y"]) / target["vy"], 0.0)
+
+    def balloon_score(self, balloon, target):
+        queue_delay = max(
+            0.0,
+            balloon["next_launch_time"] - self.time,
+        ) + len(balloon["queue"]) * config.LAUNCH_INTERVAL
+        travel_time = distance(target, balloon) / max(self.interceptor_speed, 1e-6)
+        inventory_used = config.INTERCEPTORS_PER_BALLOON - balloon["inventory"]
+        return (
+            queue_delay * config.QUEUE_SCORE_WEIGHT
+            + travel_time
+            + inventory_used * config.INVENTORY_SCORE_WEIGHT
+        )
+
+    def available_balloons_for_assignment(self, target):
+        candidates = [
+            balloon for balloon in self.balloons if balloon["inventory"] > 0
         ]
+        if not config.GLOBAL_ASSIGNMENT_ENABLED:
+            candidates = [
+                balloon
+                for balloon in candidates
+                if distance(target, balloon) <= config.DETECTION_RANGE
+            ]
+        return candidates
 
     def assign_interceptor(self, target):
-        candidates = self.available_balloons_in_range(target)
+        candidates = self.available_balloons_for_assignment(target)
         if not candidates:
             return False
 
-        balloon = min(candidates, key=lambda node: distance(target, node))
+        balloon = min(candidates, key=lambda node: self.balloon_score(node, target))
         balloon["inventory"] -= 1
         balloon["queue"].append(target["id"])
 
@@ -188,8 +244,9 @@ class Simulation:
             "turn_mode": "NORMAL",
         }
         self.event_log.append(
-            f"T{target['id']} queued B{balloon['id']} at {self.time:.1f}s; "
-            f"ready {target['ready_time']:.1f}s"
+            f"T{target['id']} globally assigned B{balloon['id']} at {self.time:.1f}s; "
+            f"ready {target['ready_time']:.1f}s; "
+            f"TTF {self.estimated_time_to_fob(target):.1f}s"
         )
         return True
 
@@ -329,18 +386,14 @@ class Simulation:
         while target["history"] and self.time - target["history"][0]["time"] > 20.0:
             target["history"].pop(0)
 
-        if not target["detected"]:
-            in_any_detection_zone = any(
-                distance(target, balloon) <= config.DETECTION_RANGE
-                for balloon in self.balloons
-            )
-            if in_any_detection_zone:
-                if not self.assign_interceptor(target) and not target["unassigned"]:
-                    target["unassigned"] = True
-                    target["status"] = "UNASSIGNED"
-                    self.event_log.append(
-                        f"T{target['id']} unassigned: no local inventory"
-                    )
+        self.update_ground_track(target)
+        if not target["detected"] and self.has_track_for_assignment(target):
+            if not self.assign_interceptor(target) and not target["unassigned"]:
+                target["unassigned"] = True
+                target["status"] = "UNASSIGNED"
+                self.event_log.append(
+                    f"T{target['id']} unassigned: network inventory exhausted"
+                )
 
         interceptor = target["interceptor"]
         if interceptor is not None and interceptor["launched"]:
@@ -386,6 +439,7 @@ class Simulation:
         return {
             "targets": len(self.targets),
             "waiting": sum(1 for target in self.targets if not target["spawned"]),
+            "tracks": sum(1 for target in self.targets if target["track_available"]),
             "queued": sum(1 for target in self.targets if target["status"] == "QUEUED"),
             "stabilizing": sum(1 for target in self.targets if target["status"] == "STABILIZING"),
             "launched": sum(
