@@ -171,8 +171,11 @@ class Simulation:
             "vy": 0.0,
             "speed": self.interceptor_speed,
             "heading": initial_heading,
+            "drop_angle_deg": config.INTERCEPTOR_DROP_ANGLE_DEG,
             "launched": False,
             "launch_time": None,
+            "engage_time": None,
+            "stabilized": False,
             "expired": False,
             "path": [],
             "waypoint": None,
@@ -227,11 +230,12 @@ class Simulation:
 
             interceptor["launched"] = True
             interceptor["launch_time"] = self.time
-            target["status"] = "LAUNCHED"
+            interceptor["engage_time"] = self.time + config.INTERCEPTOR_STABILIZATION_TIME
+            target["status"] = "STABILIZING"
             balloon["next_launch_time"] = self.time + config.LAUNCH_INTERVAL
             self.event_log.append(
-                f"I{interceptor['id']} launched B{balloon['id']} at {self.time:.1f}s; "
-                f"next slot {balloon['next_launch_time']:.1f}s"
+                f"I{interceptor['id']} dropped B{balloon['id']} at {self.time:.1f}s; "
+                f"engage {interceptor['engage_time']:.1f}s"
             )
 
     def apply_target_maneuver(self, target):
@@ -313,7 +317,16 @@ class Simulation:
         if interceptor is not None and interceptor["launched"]:
             if self.time - interceptor["launch_time"] >= config.INTERCEPTOR_MAX_FLIGHT_TIME:
                 self.expire_interceptor(target, interceptor)
+            elif self.time < interceptor["engage_time"]:
+                target["status"] = "STABILIZING"
+                interceptor["tracking_status"] = "STABILIZING"
             else:
+                if not interceptor["stabilized"]:
+                    interceptor["stabilized"] = True
+                    target["status"] = "LAUNCHED"
+                    self.event_log.append(
+                        f"I{interceptor['id']} stabilized and engaged at {self.time:.1f}s"
+                    )
                 self.move_interceptor(target, interceptor, dt)
                 if distance(target, interceptor) <= config.SUCCESS_RADIUS:
                     target["status"] = "INTERCEPT"
@@ -345,10 +358,11 @@ class Simulation:
             "targets": len(self.targets),
             "waiting": sum(1 for target in self.targets if not target["spawned"]),
             "queued": sum(1 for target in self.targets if target["status"] == "QUEUED"),
+            "stabilizing": sum(1 for target in self.targets if target["status"] == "STABILIZING"),
             "launched": sum(
                 1
                 for target in self.targets
-                if target["interceptor"] is not None and target["interceptor"].get("launched")
+                if target["interceptor"] is not None and target["interceptor"].get("stabilized")
             ),
             "intercepted": sum(1 for target in self.targets if target["status"] == "INTERCEPT"),
             "failed": sum(1 for target in self.targets if target["status"] == "FAILED"),
