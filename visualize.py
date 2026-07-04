@@ -381,13 +381,6 @@ while running:
         )
         screen.blit(font.render(summary, True, (0, 120, 0)), (20, 100))
 
-    screen.blit(font.render("Event Log", True, (0, 0, 0)), (820, 20))
-    for index, message in enumerate(simulation.event_log[-14:]):
-        screen.blit(
-            small_font.render(message, True, (0, 0, 0)),
-            (820, 50 + index * 21),
-        )
-
     pygame.display.flip()
 
 pygame.quit()
