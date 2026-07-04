@@ -183,6 +183,9 @@ class Simulation:
             "last_track_time": self.time,
             "tracking_status": "QUEUED",
             "aim_point": None,
+            "hard_turn_remaining": config.INTERCEPTOR_HARD_TURN_MAX_SECONDS,
+            "hard_turn_cooldown_until": 0.0,
+            "turn_mode": "NORMAL",
         }
         self.event_log.append(
             f"T{target['id']} queued B{balloon['id']} at {self.time:.1f}s; "
@@ -249,6 +252,31 @@ class Simulation:
         target["maneuver_count"] += 1
         target["next_maneuver_time"] = self.time + rng.uniform(*config.MANEUVER_INTERVAL_RANGE)
 
+    def turn_rate_for(self, interceptor, heading_error, dt):
+        hard_turn_requested = (
+            abs(math.degrees(heading_error)) >= config.INTERCEPTOR_HARD_TURN_TRIGGER_DEG
+        )
+        hard_turn_available = (
+            self.time >= interceptor["hard_turn_cooldown_until"]
+            and interceptor["hard_turn_remaining"] > 0.0
+        )
+
+        if hard_turn_requested and hard_turn_available:
+            interceptor["turn_mode"] = "HARD"
+            interceptor["hard_turn_remaining"] = max(
+                0.0, interceptor["hard_turn_remaining"] - dt
+            )
+            if interceptor["hard_turn_remaining"] <= 0.0:
+                interceptor["hard_turn_cooldown_until"] = (
+                    self.time + config.INTERCEPTOR_HARD_TURN_COOLDOWN_SECONDS
+                )
+            return config.INTERCEPTOR_HARD_TURN_RATE_DEG_PER_SEC
+
+        if self.time >= interceptor["hard_turn_cooldown_until"]:
+            interceptor["hard_turn_remaining"] = config.INTERCEPTOR_HARD_TURN_MAX_SECONDS
+        interceptor["turn_mode"] = "NORMAL"
+        return config.INTERCEPTOR_NORMAL_TURN_RATE_DEG_PER_SEC
+
     def move_interceptor(self, target, interceptor, dt):
         aim = guidance.aim_point(
             self.guidance_mode,
@@ -260,7 +288,8 @@ class Simulation:
         interceptor["aim_point"] = aim
         desired_heading = math.atan2(aim["y"] - interceptor["y"], aim["x"] - interceptor["x"])
         heading_error = normalize_angle(desired_heading - interceptor["heading"])
-        max_turn = math.radians(config.INTERCEPTOR_MAX_TURN_RATE_DEG_PER_SEC) * dt
+        turn_rate = self.turn_rate_for(interceptor, heading_error, dt)
+        max_turn = math.radians(turn_rate) * dt
         heading_change = max(-max_turn, min(max_turn, heading_error))
         interceptor["heading"] = normalize_angle(interceptor["heading"] + heading_change)
         interceptor["vx"] = interceptor["speed"] * math.cos(interceptor["heading"])
