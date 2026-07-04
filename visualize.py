@@ -51,7 +51,33 @@ def draw_vector(entity, vx, vy, color):
     pygame.draw.polygon(screen, color, [end, left, right])
 
 
-def write_completed_run_log(simulation, metrics):
+def persistent_outcome_metrics(simulation):
+    """Derive run-history counts that remain valid after interceptors are removed."""
+    events = simulation.event_log
+    assigned = sum(" globally assigned B" in message for message in events)
+    dropped = sum(" dropped B" in message for message in events)
+    stabilized = sum(" stabilized; onboard acquisition started" in message for message in events)
+    ever_locked = sum(" acquired track T" in message for message in events)
+    tracking_failed = sum(
+        " failed to reacquire T" in message or " timed out on T" in message
+        for message in events
+    )
+    inventory_unassigned = sum(
+        "unassigned: network inventory exhausted" in message for message in events
+    )
+    crossed_line = sum(" crossed line at " in message for message in events)
+    return {
+        "assigned": assigned,
+        "dropped": dropped,
+        "stabilized_total": stabilized,
+        "ever_locked": ever_locked,
+        "tracking_failed": tracking_failed,
+        "inventory_unassigned": inventory_unassigned,
+        "crossed_line": crossed_line,
+    }
+
+
+def write_completed_run_log(simulation, metrics, outcomes):
     """Append one summary block after a run reaches completion."""
     with open("simulation_log.txt", "a", encoding="utf-8") as log_file:
         log_file.write(
@@ -59,8 +85,11 @@ def write_completed_run_log(simulation, metrics):
         )
         log_file.write(
             f"Seed: {simulation.seed} | Targets: {metrics['targets']} | "
-            f"Intercepted: {metrics['intercepted']} | Failed: {metrics['failed']} | "
-            f"Unassigned: {metrics['unassigned']}\n"
+            f"Assigned: {outcomes['assigned']} | Dropped: {outcomes['dropped']} | "
+            f"Stabilized: {outcomes['stabilized_total']} | Ever locked: {outcomes['ever_locked']} | "
+            f"Intercepted: {metrics['intercepted']} | Tracking failed: {outcomes['tracking_failed']} | "
+            f"Inventory unassigned: {outcomes['inventory_unassigned']} | "
+            f"Crossed line: {outcomes['crossed_line']}\n"
         )
         log_file.write("Event Log:\n")
         for message in simulation.event_log:
@@ -155,8 +184,9 @@ while running:
         simulation.step(elapsed_seconds * simulation_rate)
 
     metrics = simulation.metrics()
+    outcomes = persistent_outcome_metrics(simulation)
     if started and simulation.complete and not run_logged:
-        write_completed_run_log(simulation, metrics)
+        write_completed_run_log(simulation, metrics, outcomes)
         run_logged = True
 
     screen.fill((245, 245, 245))
@@ -323,15 +353,24 @@ while running:
         (20, 20),
     )
     screen.blit(
-        font.render(
-            f"targets={metrics['targets']} waiting={metrics['waiting']} queued={metrics['queued']} "
-            f"launched={metrics['launched']} intercepted={metrics['intercepted']} "
-            f"failed={metrics['failed']} unassigned={metrics['unassigned']} "
-            f"maneuvers={metrics['maneuvers']} speed={simulation.interceptor_speed:.0f} yd/s",
+        small_font.render(
+            f"targets={metrics['targets']} assigned={outcomes['assigned']} dropped={outcomes['dropped']} "
+            f"stabilized={outcomes['stabilized_total']} ever_locked={outcomes['ever_locked']} "
+            f"intercepted={metrics['intercepted']}",
             True,
             (0, 0, 0),
         ),
         (20, 46),
+    )
+    screen.blit(
+        small_font.render(
+            f"tracking_failed={outcomes['tracking_failed']} inventory_unassigned={outcomes['inventory_unassigned']} "
+            f"crossed_line={outcomes['crossed_line']} active_locked={metrics['locked']} "
+            f"maneuvers={metrics['maneuvers']} speed={simulation.interceptor_speed:.0f} yd/s",
+            True,
+            (0, 0, 0),
+        ),
+        (20, 66),
     )
     screen.blit(
         small_font.render(
@@ -340,11 +379,11 @@ while running:
             True,
             (0, 0, 0),
         ),
-        (20, 74),
+        (20, 88),
     )
 
     if not started:
-        panel = pygame.Rect(220, 115, 660, 325)
+        panel = pygame.Rect(220, 125, 660, 325)
         pygame.draw.rect(screen, (235, 242, 252), panel)
         pygame.draw.rect(screen, (0, 70, 150), panel, 2)
         screen.blit(
@@ -372,14 +411,15 @@ while running:
             (panel.x + 235, panel.y + 298),
         )
     elif paused:
-        screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 100))
+        screen.blit(font.render("PAUSED", True, (0, 0, 0)), (20, 112))
 
     if simulation.complete:
         summary = (
-            f"RUN COMPLETE: {metrics['intercepted']} intercepted, "
-            f"{metrics['failed']} failed, {metrics['unassigned']} were unassigned"
+            f"RUN COMPLETE: {metrics['intercepted']}/{outcomes['dropped']} intercepted; "
+            f"tracking failed={outcomes['tracking_failed']}; "
+            f"inventory unassigned={outcomes['inventory_unassigned']}"
         )
-        screen.blit(font.render(summary, True, (0, 120, 0)), (20, 100))
+        screen.blit(font.render(summary, True, (0, 120, 0)), (20, 112))
 
     pygame.display.flip()
 
