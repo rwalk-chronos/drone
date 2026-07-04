@@ -1,5 +1,6 @@
 """Pygame visualization for the drone response timing simulator."""
 
+import datetime
 import math
 import pygame
 
@@ -50,12 +51,30 @@ def draw_vector(entity, vx, vy, color):
     pygame.draw.polygon(screen, color, [end, left, right])
 
 
+def write_completed_run_log(simulation, metrics):
+    """Append one summary block after a run reaches completion."""
+    with open("simulation_log.txt", "a", encoding="utf-8") as log_file:
+        log_file.write(
+            f"\n--- Simulation Run: {datetime.datetime.now().isoformat(timespec='seconds')} ---\n"
+        )
+        log_file.write(
+            f"Seed: {simulation.seed} | Targets: {metrics['targets']} | "
+            f"Intercepted: {metrics['intercepted']} | Failed: {metrics['failed']} | "
+            f"Unassigned: {metrics['unassigned']}\n"
+        )
+        log_file.write("Event Log:\n")
+        for message in simulation.event_log:
+            log_file.write(f"- {message}\n")
+        log_file.write("-" * 40 + "\n")
+
+
 simulation = Simulation()
 started = False
 paused = False
 show_vectors = True
 simulation_rate = 1.0
 running = True
+run_logged = False
 
 while running:
     elapsed_seconds = clock.tick(config.FPS) / 1000.0
@@ -67,6 +86,7 @@ while running:
             if not started:
                 started = True
                 paused = False
+                run_logged = False
                 simulation.event_log.append("Run started")
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
             if started:
@@ -77,10 +97,12 @@ while running:
             simulation.cycle_guidance_mode()
             started = False
             paused = False
+            run_logged = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_m:
             simulation.cycle_maneuver_mode()
             started = False
             paused = False
+            run_logged = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_1:
             simulation_rate = 1.0
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_2:
@@ -91,8 +113,10 @@ while running:
             simulation_rate = 10.0
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_UP:
             simulation.adjust_interceptor_speed(5.0)
+            run_logged = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_DOWN:
             simulation.adjust_interceptor_speed(-5.0)
+            run_logged = False
         elif event.type == pygame.KEYDOWN and event.key in (
             pygame.K_RIGHT,
             pygame.K_RIGHTBRACKET,
@@ -101,6 +125,7 @@ while running:
             simulation.set_target_count(simulation.target_count + 1)
             started = False
             paused = False
+            run_logged = False
         elif event.type == pygame.KEYDOWN and event.key in (
             pygame.K_LEFT,
             pygame.K_LEFTBRACKET,
@@ -109,21 +134,30 @@ while running:
             simulation.set_target_count(simulation.target_count - 1)
             started = False
             paused = False
+            run_logged = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_n:
             simulation.new_seed()
             started = False
             paused = False
+            run_logged = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_s:
             simulation.toggle_staggered_arrival()
             started = False
             paused = False
+            run_logged = False
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
             simulation.reset()
             started = False
             paused = False
+            run_logged = False
 
     if started and not paused:
         simulation.step(elapsed_seconds * simulation_rate)
+
+    metrics = simulation.metrics()
+    if started and simulation.complete and not run_logged:
+        write_completed_run_log(simulation, metrics)
+        run_logged = True
 
     screen.fill((245, 245, 245))
 
@@ -136,7 +170,6 @@ while running:
             1,
         )
 
-    # Forward balloon picket line
     pygame.draw.line(
         screen,
         (0, 130, 0),
@@ -153,7 +186,6 @@ while running:
         to_screen(-1250, config.BALLOON_PICKET_Y + 25),
     )
 
-    # FOB failure line
     pygame.draw.line(
         screen,
         (180, 0, 0),
@@ -278,7 +310,6 @@ while running:
                     (0, 0, 180),
                 )
 
-    metrics = simulation.metrics()
     arrival_mode = "staggered" if simulation.staggered_arrival else "simultaneous"
     guidance_label = guidance.mode_label(simulation.guidance_mode)
     screen.blit(
@@ -330,7 +361,11 @@ while running:
             f"Seed: {simulation.seed}    Arrival: {arrival_mode}",
         ]
         for index, line in enumerate(setup_lines):
-            rendered = large_font.render(line, True, (0, 0, 0)) if index < 4 else font.render(line, True, (0, 0, 0))
+            rendered = (
+                large_font.render(line, True, (0, 0, 0))
+                if index < 4
+                else font.render(line, True, (0, 0, 0))
+            )
             screen.blit(rendered, (panel.x + 55, panel.y + 68 + index * 36))
         screen.blit(
             font.render("Press ENTER to start", True, (0, 100, 0)),
